@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kerberator.fullname" . }}
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kerberator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kerberator.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "kerberator.fullname" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: manager
+          image: {{ include "kerberator.imageRef" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --metrics-addr=:{{ .Values.ports.metrics }}
+            - --health-probe-addr=:{{ .Values.ports.probes }}
+            - --requeue-interval={{ .Values.requeueInterval }}
+            - --daemon-image={{ default (printf "ghcr.io/dell/kerberator-daemon:v%s" .Chart.AppVersion) .Values.daemon.image }}
+            - --events-enabled={{ .Values.events.enabled }}
+            {{- if .Values.events.enabled }}
+            - --event-cache-ttl={{ .Values.events.cacheTTL }}
+            - --event-gc-interval={{ .Values.events.gcInterval }}
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - --webhook-enabled=true
+            - --webhook-port={{ .Values.ports.webhook }}
+            - --webhook-cert-dir=/etc/webhook/certs
+            {{- end }}
+            {{- with .Values.extraArgs }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.ports.metrics }}
+              protocol: TCP
+            - name: probes
+              containerPort: {{ .Values.ports.probes }}
+              protocol: TCP
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.ports.webhook }}
+              protocol: TCP
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+          {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ default (printf "%s-webhook-cert" (include "kerberator.fullname" .)) .Values.webhook.certSecret }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

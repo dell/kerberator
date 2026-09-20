@@ -1,0 +1,244 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: principals.kerberator.dell.com
+spec:
+  group: kerberator.dell.com
+  scope: Namespaced
+  names:
+    kind: Principal
+    listKind: PrincipalList
+    singular: principal
+    plural: principals
+    shortNames:
+      - krbprincipal
+      - kp
+    categories:
+      - kerberos
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: UID
+          type: integer
+          jsonPath: .spec.uid
+        - name: Principal
+          type: string
+          jsonPath: .spec.principal
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Nodes
+          type: string
+          jsonPath: .status.tenant.readySummary
+        - name: Kvno
+          type: integer
+          jsonPath: .status.kvnoFromSecret
+          description: KVNO in the referenced Keytab Secret
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: >-
+            Principal is one Kerberos identity served by a
+            kerberator-daemon. Operators author the CR directly with
+            tenantRef.name pointing at a Tenant
+            and keytabSecretRef pointing at a Secret holding the
+            Principal's binary keytab. The controller aggregates
+            all Principals for a tenant into its roster ConfigMap
+            and keytab Secret.
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [uid, principal, tenantRef]
+              properties:
+                uid:
+                  type: integer
+                  # No schema-level minimum: we want the webhook to
+                  # produce the user-friendly "0 is reserved for root"
+                  # message rather than a generic schema error.
+                  description: >-
+                    POSIX UID this Kerberos identity maps to.
+                    Must be > 0; the admission webhook rejects 0
+                    (reserved for root).
+                principal:
+                  type: string
+                  minLength: 1
+                  description: >-
+                    Kerberos principal (e.g. svc-a@TENANT). The
+                    tenant portion must match the referenced
+                    Tenant's spec.tenant.
+                keytab:
+                  type: string
+                  description: >-
+                    Desired filename of this Principal's keytab inside
+                    the tenant's aggregated Secret. Typically left
+                    empty on input; the controller derives it from
+                    keytabSecretRef.key.
+                keytabSecretRef:
+                  type: object
+                  required: [name, key]
+                  description: >-
+                    Secret + data key in this Principal's namespace
+                    containing the binary keytab. The controller
+                    reads the bytes and contributes them to the
+                    tenant's aggregated keytab Secret.
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                    key:
+                      type: string
+                      minLength: 1
+                tenantRef:
+                  type: object
+                  required: [name]
+                  description: >-
+                    References the Tenant in this
+                    Principal's namespace that owns this Principal.
+                  properties:
+                    name:
+                      type: string
+                      minLength: 1
+                      description: >-
+                        Name of a Tenant in this
+                        Principal's namespace.
+                disabled:
+                  type: boolean
+                  description: >-
+                    When true, excludes this Principal from the Tenant's
+                    aggregated roster on the next reconcile. The
+                    daemon then prunes the on-node ccache (subject
+                    to Tenant.spec.daemon.pruneStale). Set back to
+                    false to restore. Soft-revoke primitive; Principal
+                    CR, keytab Secret, and audit history are all
+                    preserved.
+                disabledReason:
+                  type: string
+                  description: >-
+                    Free-form human label surfaced on
+                    Principal.status.conditions[Ready].message.
+                    Recommended values (not enforced): compromised,
+                    maintenance, audit-hold. Ignored when disabled
+                    is false.
+                nodeSelector:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: >-
+                    Restricts this Principal's on-node ccache to
+                    workers whose Node labels match ALL key=value
+                    pairs. Empty (default) means every node the
+                    Tenant serves. Enforcement: operator writes
+                    selectors into the roster ConfigMap; the daemon
+                    filters per-node against its own labels
+                    (fetched via the Kubernetes API). Use for
+                    blast-radius reduction, geo-zone segregation,
+                    or hardware-tier gating.
+            status:
+              type: object
+              properties:
+                observedRosterResourceVersion:
+                  type: string
+                  description: >-
+                    Legacy field retained for compatibility with
+                    v0.1 observer-projected CRs. Not written by
+                    the current reconciler.
+                rosterLine:
+                  type: string
+                  description: >-
+                    The exact `uid:principal:keytab` string the
+                    controller produced for this Principal on the last
+                    successful aggregation. Debugging aid.
+                kvnoFromSecret:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: >-
+                    Highest KVNO (Kerberos key version number)
+                    observed in the referenced Keytab Secret on
+                    the last successful reconcile. Compared
+                    against the KDC to detect drift after
+                    credential rotation. Zero means "not observed
+                    yet or Secret was empty/unparseable" — the
+                    operator retries on the next reconcile.
+                enctypesFromSecret:
+                  type: string
+                  description: >-
+                    Sorted, comma-separated list of Kerberos
+                    encryption types present in the referenced
+                    Keytab Secret. Example:
+                    "aes128-cts-hmac-sha1-96, aes256-cts-hmac-sha1-96".
+                keytabObservedAt:
+                  type: string
+                  format: date-time
+                  description: >-
+                    Timestamp of the reconcile that populated
+                    kvnoFromSecret and enctypesFromSecret. Bumps
+                    when Kerberator observes new bytes in the
+                    Secret (e.g., after `kubectl krb rotate-keytab`).
+                tenant:
+                  type: object
+                  properties:
+                    desiredNodes:
+                      type: integer
+                    readyNodes:
+                      type: integer
+                    readySummary:
+                      type: string
+                      description: Human-readable "N/M" rollup for the Nodes column.
+                nodes:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, daemonPodReady]
+                    properties:
+                      name:
+                        type: string
+                      daemonPodReady:
+                        type: boolean
+                      lastObserved:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                        description: >-
+                          Reason for the observation. When the operator
+                          has a fresh per-UID tenant Event, this is the
+                          event's Kerberos* reason (Minted, MintFailed,
+                          Pruned, KeytabMissing). When it falls back to
+                          pod-readiness rollup, this is a short pod-level
+                          reason (NotReady, PodMissing, etc.).
+                      message:
+                        type: string
+                        description: >-
+                          Human-readable text from the most recent
+                          per-UID tenant Event, when available. Empty in
+                          the pod-readiness fallback path.
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

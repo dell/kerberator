@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+{{- if .Values.installRBAC }}
+# RBAC scope, v1alpha1:
+#
+#   * Read-only on Pods (health rollup) and on user-authored Secrets
+#     (source of Principal keytab bytes in manage mode).
+#   * Full lifecycle on ConfigMaps, Secrets, and DaemonSets so the
+#     tenant controller can own the aggregated roster CM, keytab
+#     Secret, and tenant DaemonSet in manage mode. The controller
+#     enforces ownerRef-scoped writes in code: it refuses to modify
+#     any child object that does not already carry a controller
+#     ownerRef pointing at the parent Tenant (see
+#     ownedBy in tenant_helpers.go). This closes the gap between
+#     the coarse RBAC verbs Kubernetes offers and the finer-grained
+#     ownership-scoped semantics we actually want.
+#   * Full lifecycle on Principals and Tenants.
+#   * Create/patch on Events for observability.
+#
+# The observe-mode invariant (v0.1) is preserved by the reconciler
+# code path, not by RBAC — the code refuses to write to an object
+# unless it already owns it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kerberator.fullname" . }}
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    # nodes:get,list,watch is required by v0.8's per-Principal
+    # NodeSelector feature. On each Tenant reconcile the operator
+    # snapshots every node's labels into a `node-labels.json` key
+    # in the aggregated roster ConfigMap; the daemon then filters
+    # its roster entries by matching each Principal's selector
+    # against its own node's labels. Read-only.
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    # namespaces:get is required by the validating admission
+    # webhook: on every Principal Create/Update it fetches
+    # the Principal's namespace to read the OpenShift SCC uid-range
+    # annotation. Read-only.
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [configmaps, secrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [daemonsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    # roles + rolebindings: owned by the manage-mode reconciler so
+    # each aggregated tenant DaemonSet gets a namespace-scoped
+    # events Role/RoleBinding bound to the default SA.
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [kerberator.dell.com]
+    resources: [principals, tenants]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [kerberator.dell.com]
+    resources: [principals/status, tenants/status]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [events]
+    # get/list/watch are required by the Principal finalizer, which
+    # scans Events with reason=KerberosCcachePruned to confirm
+    # on-node ccache purges before removing the finalizer.
+    verbs: [get, list, watch, create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kerberator.fullname" . }}
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kerberator.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kerberator.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

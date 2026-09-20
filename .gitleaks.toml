@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+#
+# gitleaks configuration. Kerberator's vocabulary ("keytab", "key:") trips
+# the generic-api-key heuristic on field names, file names and on the
+# synthetic test keytab. Everything allowlisted here is either a keytab file
+# or Secret name, or a fixture generated from a throwaway random password
+# (see shared/keytab/parse_test.go).
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Kerberos keytab file/Secret names and synthetic test fixtures"
+regexTarget = "line"
+regexes = [
+  # a keytab file name or a "<name>-keytab" Secret name on the line
+  '''[\w.-]+\.keytab\b''',
+  '''[\w.-]+-keytab\b''',
+]
+paths = [
+  # ktutil-generated fixture, KVNO 3, realm EXAMPLE.COM, random password
+  '''shared/keytab/parse_test\.go''',
+  '''operator/internal/controller/principal_kvno_test\.go''',
+]

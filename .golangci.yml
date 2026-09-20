@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - revive
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        - G104 # handled case by case; errcheck covers the ones that matter
+        - G115 # int -> int32 conversions of bounded counts
+        - G204 # the daemon shells out to kinit by design
+        - G304 # file paths come from the roster the operator wrote
+        - G401 # md5 is used for roster change detection, not security
+        - G501 # same
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+    staticcheck:
+      checks:
+        - all
+        - -QF1001 # De Morgan suggestions
+        - -QF1008 # "could remove embedded field" is a style preference
+  exclusions:
+    presets: [common-false-positives, std-error-handling]
+    rules:
+      - path: _test\.go
+        linters: [gosec, errorlint]
+      # controller-runtime deprecations we have not migrated yet:
+      # the events.k8s.io recorder API and the scheme.Builder helper.
+      - linters: [staticcheck]
+        text: "GetEventRecorderFor is deprecated"
+      - linters: [staticcheck]
+        text: "scheme.Builder is deprecated"
+
+formatters:
+  enable: [gofmt, goimports]

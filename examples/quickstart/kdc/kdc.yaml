@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+#
+# A throwaway MIT Kerberos KDC for `make quickstart`. It creates realm
+# EXAMPLE.COM, one principal svc-2001, exports that principal's keytab to
+# /var/lib/kerberator-kdc/export/ (the Makefile copies it into a Secret), and
+# serves KDC traffic on port 88 inside the cluster as kdc.kerberator-demo.svc.
+#
+# This is a demo. The master key is random and lost when the pod restarts,
+# and the database lives in an emptyDir. Do not use it for anything real.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kdc-config
+data:
+  krb5.conf: |
+    [libdefaults]
+      default_realm = EXAMPLE.COM
+      dns_lookup_kdc = false
+      dns_lookup_realm = false
+      ticket_lifetime = 10h
+      renew_lifetime = 7d
+    [realms]
+      EXAMPLE.COM = {
+        kdc = kdc.kerberator-demo.svc.cluster.local:88
+      }
+  kdc.conf: |
+    [kdcdefaults]
+      kdc_ports = 88
+      kdc_tcp_ports = 88
+    [realms]
+      EXAMPLE.COM = {
+        database_name = /var/lib/kerberator-kdc/principal
+        acl_file = /etc/krb5kdc/kadm5.acl
+        key_stash_file = /var/lib/kerberator-kdc/stash
+        max_life = 10h 0m 0s
+        max_renewable_life = 7d 0h 0m 0s
+        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal
+      }
+  kadm5.acl: |
+    */admin@EXAMPLE.COM *
+  bootstrap.sh: |
+    #!/bin/sh
+    # Create the realm and demo principal on first start, then run the KDC.
+    set -eu
+    apk add --no-cache krb5-server krb5 >/dev/null
+    mkdir -p /var/lib/kerberator-kdc/export /etc/krb5kdc
+    cp /config/kdc.conf /etc/krb5kdc/kdc.conf
+    cp /config/kadm5.acl /etc/krb5kdc/kadm5.acl
+    cp /config/krb5.conf /etc/krb5.conf
+    if [ ! -f /var/lib/kerberator-kdc/principal ]; then
+      master=$(head -c 32 /dev/urandom | base64)
+      kdb5_util create -s -r EXAMPLE.COM -P "$master"
+      kadmin.local -q "addprinc -randkey svc-2001@EXAMPLE.COM"
+      kadmin.local -q "ktadd -k /var/lib/kerberator-kdc/export/svc-2001.keytab svc-2001@EXAMPLE.COM"
+      chmod 0644 /var/lib/kerberator-kdc/export/svc-2001.keytab
+    fi
+    echo "KDC ready for realm EXAMPLE.COM; demo keytab exported."
+    exec krb5kdc -n
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kdc
+spec:
+  selector: {app: kdc}
+  ports:
+    - {name: kdc-tcp, port: 88, targetPort: 88, protocol: TCP}
+    - {name: kdc-udp, port: 88, targetPort: 88, protocol: UDP}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kdc
+  labels: {app: kdc}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: kdc}
+  template:
+    metadata:
+      labels: {app: kdc}
+    spec:
+      containers:
+        - name: kdc
+          image: alpine:3.20
+          command: [/bin/sh, /config/bootstrap.sh]
+          ports:
+            - {containerPort: 88, protocol: TCP}
+            - {containerPort: 88, protocol: UDP}
+          readinessProbe:
+            exec:
+              command: [test, -s, /var/lib/kerberator-kdc/export/svc-2001.keytab]
+            periodSeconds: 3
+          volumeMounts:
+            - {name: config, mountPath: /config}
+            - {name: data, mountPath: /var/lib/kerberator-kdc}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 128Mi}
+      volumes:
+        - name: config
+          configMap: {name: kdc-config, defaultMode: 0755}
+        - name: data
+          emptyDir: {}

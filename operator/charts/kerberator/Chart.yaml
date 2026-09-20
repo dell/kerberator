@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+apiVersion: v2
+name: kerberator
+description: >-
+  Kerberator - Kubernetes operator that runs per-user Kerberos ticket
+  cache minting on every node. Creates a per-node DaemonSet (kerberator-daemon) per Tenant
+  and two CRDs (Tenant, Principal) with a validating admission webhook and
+  per-UID Event ingestion for enriched Principal status.
+type: application
+version: 0.10.0
+appVersion: "0.10.0"
+kubeVersion: ">=1.24.0-0"
+keywords:
+  - kerberos
+  - operator
+  - multi-user
+  - nfs
+  - gssapi
+  - kubectl-plugin
+home: https://github.com/dell/kerberator
+sources:
+  - https://github.com/dell/kerberator
+maintainers:
+  - name: Dell Technologies
+    url: https://github.com/dell/kerberator
+annotations:
+  category: Security
+  artifacthub.io/prerelease: "true"

@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenants.kerberator.dell.com
+spec:
+  group: kerberator.dell.com
+  scope: Namespaced
+  names:
+    kind: Tenant
+    listKind: TenantList
+    singular: tenant
+    plural: tenants
+    shortNames:
+      - krbtenant
+      - kt
+    categories:
+      - kerberos
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Realm
+          type: string
+          jsonPath: .spec.realm
+        - name: Nodes
+          type: string
+          jsonPath: .status.readySummary
+        - name: Principals
+          type: integer
+          jsonPath: .status.principalCount
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: >-
+            Tenant represents one kerberator-daemon
+            installation. The controller owns the tenant
+            DaemonSet, the aggregated roster ConfigMap, and the
+            aggregated keytab Secret; all three are ownerRef'd
+            to the Tenant.
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [realm]
+              properties:
+                realm:
+                  type: string
+                  minLength: 1
+                  description: >-
+                    Kerberos realm this CR represents (e.g.
+                    EXAMPLE.COM). All Principals referencing this
+                    Tenant must have principals in this Kerberos realm.
+                daemon:
+                  type: object
+                  description: >-
+                    Values rendered into the per-node
+                    kerberator-daemon DaemonSet.
+                  properties:
+                    image:
+                      type: string
+                      description: >-
+                        Daemon image override. Empty uses the image the
+                        operator was installed with (chart value
+                        daemon.image, pinned to the operator version).
+                    imagePullPolicy:
+                      type: string
+                      enum: [Always, IfNotPresent, Never]
+                    hostCachePath:
+                      type: string
+                      description: >-
+                        Host path where ccaches are written; passed
+                        to the tenant as --caches. Defaults to /tmp
+                        when unset.
+                    renewMinutes:
+                      type: integer
+                      minimum: 1
+                    pruneStale:
+                      type: boolean
+                    hostAliases:
+                      type: array
+                      items:
+                        type: object
+                        # x-kubernetes-preserve-unknown-fields is
+                        # deliberately NOT set here; kubectl will
+                        # accept the standard HostAlias shape via
+                        # the API server's own validation of the
+                        # embedded corev1 type once the operator
+                        # applies it.
+                        properties:
+                          ip:
+                            type: string
+                          hostnames:
+                            type: array
+                            items:
+                              type: string
+                    resources:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    nodeSelector:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    tolerations:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                    krb5Conf:
+                      type: string
+                      description: >-
+                        Contents of /etc/krb5.conf to project into
+                        every tenant pod. Required in practice --
+                        the stock tenant image ships without a
+                        tenant-specific krb5.conf, so kinit inside
+                        the pod cannot reach the KDC. Rendered
+                        into the aggregated roster ConfigMap under
+                        the key "krb5.conf" and mounted at
+                        /etc/krb5.conf inside the container. Empty
+                        is permitted for tests or images that bake
+                        krb5.conf in themselves.
+                deletionTimeout:
+                  type: string
+                  description: >-
+                    Duration (e.g. "60s", "5m") the Principal
+                    finalizer waits for the tenant's per-UID
+                    KerberosCcachePruned Events (one per desired
+                    tenant node) to confirm the on-node ccache
+                    has been purged before removing the finalizer
+                    anyway. Empty resolves to 60s.
+                eventStalenessThreshold:
+                  type: string
+                  description: >-
+                    Duration (e.g. "5m", "1h") after which a
+                    per-UID tenant Event is considered stale and
+                    the Principal-status builder falls back to
+                    pod-readiness rollup. Empty resolves to
+                    max(5m, 2 * tenant.renewMinutes minutes).
+                disabled:
+                  type: boolean
+                  description: >-
+                    When true, the operator aggregates an EMPTY
+                    roster for this Tenant. Every child Principal is
+                    effectively disabled at once; the DaemonSet
+                    keeps running (so ownerRef graph is preserved)
+                    but its next poll sees the empty roster and
+                    prunes every ccache. Set back to false to
+                    restore. Whole-tenant kill switch for
+                    maintenance windows; per-Principal soft revocation
+                    is on Principal.spec.disabled.
+            status:
+              type: object
+              properties:
+                desiredNodes:
+                  type: integer
+                readyNodes:
+                  type: integer
+                readySummary:
+                  type: string
+                principalCount:
+                  type: integer
+                rosterHash:
+                  type: string
+                  description: >-
+                    Stable digest of the aggregated roster
+                    contents. Useful for GitOps drift detection.
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status]
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

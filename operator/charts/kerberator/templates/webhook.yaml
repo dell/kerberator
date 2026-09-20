@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+{{- if .Values.webhook.enabled }}
+{{/*
+  Validating admission webhook plumbing for Principal CRs.
+
+  This template emits:
+
+    * A Service that fronts the manager pod's webhook port so the
+      apiserver's admission controller can reach us over stable DNS.
+      Services are namespaced so the VWC's clientConfig.service uses
+      the release namespace.
+
+    * A ValidatingWebhookConfiguration that routes CREATE and UPDATE
+      requests on principals.kerberator.dell.com to the webhook.
+      DELETE is intentionally NOT routed here — the finalizer
+      controller enforces the delete invariants at reconcile time.
+
+    * A cert-manager Issuer + Certificate pair when
+      webhook.certManager.enabled=true. The Issuer is a self-signed
+      one scoped to this release; the Certificate populates the
+      Secret named webhook.certSecret (default: <fullname>-webhook-cert)
+      with tls.crt + tls.key that the operator mounts at
+      /etc/webhook/certs.
+
+  Failure policy:
+
+    * Create ops   -> Fail (a broken webhook must block bad CRs).
+    * Update ops   -> Ignore (so a mid-flight cluster reconfig
+                       doesn't lock admins out of cleanup edits).
+
+  This split isn't expressible on a single VWC rule, so we register
+  two rules on the same webhook, each with its own failurePolicy.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kerberator.fullname" . }}-webhook
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "kerberator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: webhook
+      port: 443
+      targetPort: webhook
+      protocol: TCP
+---
+{{- if .Values.webhook.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "kerberator.fullname" . }}-selfsigned
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kerberator.fullname" . }}-webhook-cert
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+spec:
+  # The Secret cert-manager writes tls.crt + tls.key into. Must
+  # match webhook.certSecret (or the computed default below) so
+  # the operator's Deployment picks up the right file.
+  secretName: {{ default (printf "%s-webhook-cert" (include "kerberator.fullname" .)) .Values.webhook.certSecret }}
+  duration:     {{ .Values.webhook.certManager.duration }}
+  renewBefore:  {{ .Values.webhook.certManager.renewBefore }}
+  issuerRef:
+    name: {{ include "kerberator.fullname" . }}-selfsigned
+    kind: Issuer
+  dnsNames:
+    # These are the SANs the apiserver connects on; must match the
+    # VWC clientConfig.service exactly.
+    - {{ include "kerberator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "kerberator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  privateKey:
+    rotationPolicy: Always
+---
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kerberator.fullname" . }}-principal-validate
+  labels:
+    {{- include "kerberator.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  # cert-manager watches this annotation and writes the CA bundle
+  # from the referenced Certificate's Secret into every webhook
+  # entry's clientConfig.caBundle field on this VWC. Without this,
+  # the apiserver has no way to verify our TLS cert.
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kerberator.fullname" . }}-webhook-cert
+  {{- end }}
+webhooks:
+  # Rule 1: CREATE ops -- failurePolicy=Fail.
+  - name: create.principals.kerberator.dell.com
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      service:
+        name: {{ include "kerberator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kerberator-dell-com-v1alpha1-principal
+        port: 443
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups:   [kerberator.dell.com]
+        apiVersions: [v1alpha1]
+        operations:  [CREATE]
+        resources:   [principals]
+        scope:       Namespaced
+  # Rule 2: UPDATE ops -- failurePolicy=Ignore. See the header
+  # comment for why the two operations get separate policies.
+  - name: update.principals.kerberator.dell.com
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Ignore
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      service:
+        name: {{ include "kerberator.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kerberator-dell-com-v1alpha1-principal
+        port: 443
+      {{- if and (not .Values.webhook.certManager.enabled) .Values.webhook.caBundle }}
+      caBundle: {{ .Values.webhook.caBundle }}
+      {{- end }}
+    rules:
+      - apiGroups:   [kerberator.dell.com]
+        apiVersions: [v1alpha1]
+        operations:  [UPDATE]
+        resources:   [principals]
+        scope:       Namespaced
+{{- end }}

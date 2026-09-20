@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/dell/kerberator/security/policy
+    about: Please report security issues privately per SECURITY.md — do NOT open a public Issue.
+  - name: Question / discussion
+    url: https://github.com/dell/kerberator/discussions
+    about: For usage questions, "how do I…" threads, and design discussions.

@@ -1,0 +1,34 @@
+Kerberator
+Copyright (c) 2026 Dell Technologies
+
+This product includes software developed at Dell Technologies.
+
+Third-party dependencies retain their own licenses. See go.mod and go.sum
+for the authoritative list. Notable direct dependencies:
+
+  k8s.io/apimachinery, k8s.io/api, k8s.io/client-go, k8s.io/cli-runtime
+    Apache-2.0 · https://github.com/kubernetes/kubernetes
+
+  sigs.k8s.io/controller-runtime
+    Apache-2.0 · https://github.com/kubernetes-sigs/controller-runtime
+
+  github.com/spf13/cobra
+    Apache-2.0 · https://github.com/spf13/cobra
+
+  github.com/spf13/pflag
+    BSD-3-Clause · https://github.com/spf13/pflag
+
+  github.com/charmbracelet/bubbletea, bubbles, lipgloss
+    MIT · https://github.com/charmbracelet
+
+  gopkg.in/yaml.v3
+    MIT / Apache-2.0 · https://github.com/go-yaml/yaml
+
+The kerberator-daemon container image redistributes MIT Kerberos (the krb5
+and krb5-pkinit packages from Alpine Linux):
+
+  MIT Kerberos
+    MIT-style license · https://web.mit.edu/kerberos/
+
+Full attribution for all transitive dependencies:
+  go-licenses report ./...

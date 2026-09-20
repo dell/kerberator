@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check every commit is signed off
+        run: |
+          set -euo pipefail
+          missing=0
+          for sha in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+            if ! git show -s --format=%B "$sha" | grep -q '^Signed-off-by: .* <.*@.*>$'; then
+              echo "::error::commit $sha has no Signed-off-by trailer (use git commit -s)"; missing=1
+            fi
+          done
+          exit $missing
+
+  build-test:
+    name: Build, vet, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make build
+      - run: make vet
+      - run: go test -race -coverprofile=coverage.out ./...
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  integration:
+    name: Integration (envtest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make integration
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.6.0
+
+  helm:
+    name: Helm lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint operator/charts/kerberator
+      - run: helm template kerberator operator/charts/kerberator --namespace kerberator-system > /dev/null
+
+  images:
+    name: Container images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build operator image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: operator/Dockerfile
+          push: false
+          platforms: linux/amd64
+      - name: Build daemon image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: daemon/Dockerfile
+          push: false
+          platforms: linux/amd64
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/zricethezav/gitleaks/v8@latest
+      - run: gitleaks git --no-banner --redact .
+
+  license-headers:
+    name: SPDX headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every source file carries an SPDX identifier
+        run: |
+          set -euo pipefail
+          missing=$(git ls-files '*.go' '*.yaml' '*.yml' '*.tpl' 'Makefile' '*/Dockerfile' \
+            | grep -v -E '^(go\.sum|.*\.golden)$' \
+            | xargs grep -L 'SPDX-License-Identifier: MIT' || true)
+          if [ -n "$missing" ]; then echo "$missing"; echo "::error::files above lack an SPDX header"; exit 1; fi

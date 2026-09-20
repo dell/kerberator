@@ -1,0 +1,120 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+
+# On a v* tag: build and push multi-arch images to ghcr.io/dell, push the Helm
+# chart as an OCI artifact, render dist/install.yaml, build kubectl-krb binaries
+# with goreleaser, and publish a GitHub Release with all of it attached.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  images:
+    name: Images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Version from tag
+        id: v
+        run: |
+          echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "minor=${GITHUB_REF_NAME#v}" | sed -E 's/\.[0-9]+$//' >> "$GITHUB_OUTPUT"
+      - name: Operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: operator/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.v.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/kerberator-operator:${{ steps.v.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}/kerberator-operator:${{ steps.v.outputs.minor }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.v.outputs.tag }}
+            org.opencontainers.image.licenses=MIT
+      - name: Daemon image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: daemon/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ steps.v.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/kerberator-daemon:${{ steps.v.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}/kerberator-daemon:${{ steps.v.outputs.minor }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.v.outputs.tag }}
+            org.opencontainers.image.licenses=MIT
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    needs: images
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Check chart version matches tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          chart=$(sed -nE 's/^version: *//p' operator/charts/kerberator/Chart.yaml)
+          app=$(sed -nE 's/^appVersion: *"?([^"]*)"?/\1/p' operator/charts/kerberator/Chart.yaml)
+          [ "$chart" = "$tag" ] || { echo "::error::Chart.yaml version $chart != tag $tag (run make release-prep)"; exit 1; }
+          [ "$app" = "$tag" ]   || { echo "::error::Chart.yaml appVersion $app != tag $tag"; exit 1; }
+      - name: Render install.yaml
+        run: |
+          mkdir -p dist
+          helm template kerberator operator/charts/kerberator --namespace kerberator-system > dist/install.yaml
+      - name: Package and push chart (OCI)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          helm package operator/charts/kerberator -d dist
+          helm push dist/kerberator-*.tgz oci://${{ env.IMAGE_PREFIX }}/charts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  binaries:
+    name: kubectl-krb binaries + GitHub Release
+    runs-on: ubuntu-latest
+    needs: chart
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+#
+# Builds the kubectl-krb plugin for release. Images and the chart are handled
+# by .github/workflows/release.yml; goreleaser only does binaries + the
+# GitHub Release, and attaches dist/install.yaml and the packaged chart.
+
+version: 2
+
+project_name: kubectl-krb
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kubectl-krb
+    main: ./cli/kubectl-krb/cmd/kubectl-krb
+    binary: kubectl-krb
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/dell/kerberator/shared/version.Version={{ .Tag }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "kubectl-krb_{{ .Tag }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, NOTICE, cli/kubectl-krb/README.md]
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  draft: false
+  prerelease: true   # alpha: every release is a pre-release until 1.0
+  extra_files:
+    - glob: dist/install.yaml
+    - glob: dist/kerberator-*.tgz
+  footer: |
+    ## Install
+
+    ```bash
+    helm install kerberator oci://ghcr.io/dell/charts/kerberator --version {{ trimprefix .Tag "v" }} \
+      --namespace kerberator-system --create-namespace
+    ```
+
+    Images: `ghcr.io/dell/kerberator-operator:{{ .Tag }}`, `ghcr.io/dell/kerberator-daemon:{{ .Tag }}` (linux/amd64, linux/arm64).
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude: ['^docs:', '^test:', '^chore:']

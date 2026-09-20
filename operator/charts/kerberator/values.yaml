@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright © 2026 Dell Technologies
+
+# Values for the kerberator chart.
+#
+# Zero-friction defaults: `helm install kerberator oci://ghcr.io/dell/charts/kerberator`
+# produces a working deployment on a cluster that has cert-manager (for the
+# webhook). Point `image.repository` and `daemon.image` at a mirror if your
+# cluster cannot pull from ghcr.io (see docs/private-registry.md).
+
+image:
+  repository: ghcr.io/dell/kerberator-operator
+  tag: ""                # empty = "v" + Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# The daemon image the operator gives every Tenant's DaemonSet. Empty means
+# ghcr.io/dell/kerberator-daemon at the same version as the operator. A Tenant
+# can still override it with spec.daemon.image.
+daemon:
+  image: ""
+
+imagePullSecrets: []
+
+# How often the reconciler re-runs absent an event.
+requeueInterval: 15s
+
+# Per-UID event consumption. When enabled, the operator ingests
+# corev1.Event objects the tenant emits on its own Pods
+# (KerberosMintSucceeded / MintFailed / CcachePruned / KeytabMissing),
+# maintains a (podName, uid) in-memory cache, and enriches
+# Principal.status.nodes[] with real per-UID data. Disabling
+# this falls back to pod-readiness rollup only.
+events:
+  enabled: true
+  # TTL for observations in the cache. Chosen well beyond the K8s
+  # Event object TTL (1h default) so a stale-but-authoritative
+  # observation isn't lost between GC cycles.
+  cacheTTL: 24h
+  # GC cadence for the cache. Cheap: the sweep is O(entries).
+  gcInterval: 10m
+
+# Extra CLI args to pass to the manager binary. Rarely needed.
+extraArgs: []
+
+# CRD lifecycle. If you already installed the CRD out-of-band (e.g. via
+# a GitOps flow), set this to false so helm doesn't fight ownership.
+installCRD: true
+
+# Whether to install the ClusterRole + Binding via this chart. Turn off
+# if a cluster admin manages RBAC separately.
+installRBAC: true
+
+# Deployment tuning.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Reasonable defaults; nonroot user is baked into the image.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# Prometheus metrics + probes bindings.
+ports:
+  metrics: 8080
+  probes:  8081
+  webhook: 9443
+
+# Validating admission webhook for Principals.
+#
+#   webhook.enabled       -- master switch. When true, the operator
+#                             serves the validation endpoint and a
+#                             ValidatingWebhookConfiguration is
+#                             installed.
+#   webhook.certManager   -- use cert-manager to issue the webhook
+#                             cert. When both webhook.enabled and
+#                             webhook.certManager.enabled are true,
+#                             the chart emits a self-signed Issuer
+#                             + Certificate; the caBundle on the
+#                             VWC is injected by cert-manager via
+#                             the cert-manager.io/inject-ca-from
+#                             annotation.
+#   webhook.certSecret    -- name of the Secret that holds tls.crt
+#                             + tls.key. Populated by cert-manager
+#                             when certManager.enabled=true. When
+#                             certManager.enabled=false, the user
+#                             must create this Secret out of band
+#                             AND supply webhook.caBundle below so
+#                             the VWC has a matching CA.
+#   webhook.caBundle      -- PEM-encoded CA bundle for the VWC's
+#                             clientConfig.caBundle field. Only
+#                             consulted when certManager.enabled
+#                             is false; ignored otherwise. Set to
+#                             the CA of whatever cert you loaded
+#                             into webhook.certSecret.
+webhook:
+  # Enabled by default: the admission webhook is a headline feature
+  # of Kerberator. Requires cert-manager on the cluster (or a
+  # user-supplied certSecret + caBundle).
+  enabled: true
+  certSecret: ""            # defaults to {{ fullname }}-webhook-cert
+  caBundle: ""              # base64-encoded PEM; only when not using cert-manager
+  failurePolicy: Fail       # Fail for Create; the VWC template hard-codes Ignore for Update
+  timeoutSeconds: 5
+  certManager:
+    enabled: true
+    # duration + renewBefore forwarded to the Certificate resource
+    duration: 8760h         # 1 year
+    renewBefore: 720h       # 30 days
+
+# When true, expose /metrics via a Service. Off by default; enable it
+# when you have a scraper (ServiceMonitor, annotations, etc.).
+service:
+  metrics:
+    enabled: false
+    type: ClusterIP
+    port: 8080

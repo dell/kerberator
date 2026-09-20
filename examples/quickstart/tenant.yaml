@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2026 Dell Technologies
+
+# One Tenant per Kerberos realm. The operator turns it into a per-node
+# DaemonSet, a roster ConfigMap, and an aggregated keytab Secret.
+# Principals join it via spec.tenantRef.name.
+#
+# This one points at the throwaway in-cluster KDC from `make quickstart`
+# (examples/quickstart/kdc/). For a real KDC, change the krb5.conf and, if
+# the KDC is not in DNS, add spec.daemon.hostAliases.
+apiVersion: kerberator.dell.com/v1alpha1
+kind: Tenant
+metadata:
+  name: demo
+  namespace: kerberator-demo
+spec:
+  realm: EXAMPLE.COM
+  daemon:
+    # image: defaults to the daemon image the operator was installed with.
+    # hostCachePath: defaults to /tmp, where rpc.gssd looks for ccaches.
+    pruneStale: true
+    # hostAliases:            # only if your KDC is not resolvable from pods
+    #   - ip: 192.0.2.10
+    #     hostnames: [kdc.example.com]
+    krb5Conf: |
+      [libdefaults]
+        default_realm = EXAMPLE.COM
+        dns_lookup_kdc = false
+        dns_lookup_realm = false
+      [realms]
+        EXAMPLE.COM = {
+          kdc = kdc.kerberator-demo.svc.cluster.local:88
+        }

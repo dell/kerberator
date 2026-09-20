@@ -1,0 +1,30 @@
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+
+# Binaries
+/daemon/kerberator-daemon
+/operator/kerberator-operator
+/operator/manager
+/cli/kubectl-krb/kubectl-krb
+
+# Convenience symlinks created during development
+/kerberator
+
+# Editor
+.vscode/
+.idea/
+
+# Local test kubeconfig
+kubeconfig
+
+# Local environment files
+*.env
+
+# Envtest binaries cache (if downloaded into repo)
+/envtest-binaries/
+
+# Rendered release manifests (make manifests)
+/dist/
