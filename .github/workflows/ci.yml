@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint operator/charts/kerberator
       - run: helm template kerberator operator/charts/kerberator --namespace kerberator-system > /dev/null
 
