@@ -9,10 +9,6 @@ version: 2
 
 project_name: kubectl-krb
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: kubectl-krb
     main: ./cli/kubectl-krb/cmd/kubectl-krb

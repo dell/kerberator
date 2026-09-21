@@ -26,5 +26,6 @@ kubeconfig
 # Envtest binaries cache (if downloaded into repo)
 /envtest-binaries/
 
-# Rendered release manifests (make manifests)
+# Rendered release manifests (make manifests) and release-time downloads
 /dist/
+/release-assets/
