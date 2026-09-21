@@ -122,7 +122,7 @@ func (m appModel) viewTenantForm() string {
 	b.WriteString(styleTitle.Render("Create Tenant"))
 	b.WriteString("\n\n")
 	for i, in := range f.inputs {
-		b.WriteString(fmt.Sprintf("  %s:\n  %s\n\n", labels[i], in.View()))
+		fmt.Fprintf(&b, "  %s:\n  %s\n\n", labels[i], in.View())
 	}
 	b.WriteString("  krb5.conf:\n")
 	b.WriteString(f.conf.View())
@@ -284,7 +284,7 @@ func (m appModel) viewPrincipalForm() string {
 	b.WriteString(styleTitle.Render("Create Principal"))
 	b.WriteString("\n\n")
 	for i, in := range f.inputs {
-		b.WriteString(fmt.Sprintf("  %s:\n  %s\n\n", labels[i], in.View()))
+		fmt.Fprintf(&b, "  %s:\n  %s\n\n", labels[i], in.View())
 	}
 	// Tenant picker.
 	label := "  Tenant: "
@@ -981,7 +981,7 @@ func (m appModel) viewHelp() string {
 		{"q, ctrl+c", "quit"},
 	}
 	for _, r := range rows {
-		b.WriteString(fmt.Sprintf("  %-14s %s\n", styleHelpKey.Render(r[0]), r[1]))
+		fmt.Fprintf(&b, "  %-14s %s\n", styleHelpKey.Render(r[0]), r[1])
 	}
 	b.WriteString("\n")
 	b.WriteString(styleMuted.Render("Every action here calls the same shared functions as the"))

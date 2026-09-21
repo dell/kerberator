@@ -24,6 +24,8 @@ linters:
         - G304 # file paths come from the roster the operator wrote
         - G401 # md5 is used for roster change detection, not security
         - G501 # same
+        - G703 # taint analysis: file paths come from the daemon's own flags
+        - G706 # taint analysis: log lines include flag values by design
     revive:
       rules:
         - name: exported
@@ -33,6 +35,7 @@ linters:
         - all
         - -QF1001 # De Morgan suggestions
         - -QF1008 # "could remove embedded field" is a style preference
+        - -QF1012 # WriteString(Sprintf) vs Fprintf is a style preference
   exclusions:
     presets: [common-false-positives, std-error-handling]
     rules:
