@@ -31,7 +31,7 @@ SETUP_ENVTEST         := $(LOCALBIN)/setup-envtest
 SETUP_ENVTEST_VERSION ?= release-0.22
 ENVTEST_K8S_VERSION   ?= 1.34.x
 GOLANGCI_LINT         := $(LOCALBIN)/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.6.0
+GOLANGCI_LINT_VERSION ?= v2.13.2
 
 .PHONY: help
 help: ## Show this help.

@@ -70,7 +70,9 @@ jobs:
           cache: true
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.6.0
+          version: v2.13.2
+          # Build the linter with the workflow's Go so it can target our go.mod version.
+          install-mode: goinstall
 
   helm:
     name: Helm lint + template
