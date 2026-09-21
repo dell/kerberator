@@ -40,8 +40,8 @@ release:
   draft: false
   prerelease: true   # alpha: every release is a pre-release until 1.0
   extra_files:
-    - glob: dist/install.yaml
-    - glob: dist/kerberator-*.tgz
+    - glob: release-assets/install.yaml
+    - glob: release-assets/kerberator-*.tgz
   footer: |
     ## Install
 

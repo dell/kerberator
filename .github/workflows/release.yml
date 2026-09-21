@@ -108,10 +108,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # goreleaser --clean wipes dist/, so the chart job's assets go elsewhere.
       - uses: actions/download-artifact@v4
         with:
           name: dist
-          path: dist
+          path: release-assets
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
