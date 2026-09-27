@@ -8,7 +8,7 @@
 # Multi-arch via buildx: TARGETOS/TARGETARCH are set automatically.
 # Tests run in CI, not here.
 
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-alpine AS build
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
