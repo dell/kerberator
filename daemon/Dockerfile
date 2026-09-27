@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
       -o /out/kerberator-daemon ./daemon/cmd/kerberator-daemon
 
 # The runtime image needs MIT Kerberos (kinit, klist) from Alpine.
-FROM docker.io/library/alpine:3.22
+FROM docker.io/library/alpine:3.24
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="kerberator-daemon" \
       org.opencontainers.image.description="Kerberator node daemon: mints and renews per-UID Kerberos ticket caches from keytabs" \
