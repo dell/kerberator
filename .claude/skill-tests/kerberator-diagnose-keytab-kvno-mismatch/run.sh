@@ -35,7 +35,7 @@ AGENT_KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 
 step "running agent ($TEST) with prompt: $PROMPT"
 read -r -a agent_cmd <<<"${AGENT_CMD:-claude -p --output-format stream-json --verbose --allowedTools Bash,Read,Grep,Glob,Skill}"
-( cd "$REPO" && KUBECONFIG="$AGENT_KUBECONFIG" "${agent_cmd[@]}" "$PROMPT" ) >"$OUT.jsonl" || true
+( cd "$REPO" && KUBECONFIG="$AGENT_KUBECONFIG" "${agent_cmd[@]}" <<<"$PROMPT" ) >"$OUT.jsonl" || true
 
 "$HERE/snapshot.sh" "$OUT.after"
 
