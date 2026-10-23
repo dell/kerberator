@@ -87,14 +87,15 @@ case "$TEST" in
   t3)
     reset
     kvno="$(kdc_kvno "$KP")"
-    step "t3: build a keytab for $KP at the KDC's KVNO $kvno, but from a wrong password"
-    kdc sh -c "rm -f /tmp/dg03-t3.keytab; printf '%s\n' \
-      'addent -password -p $KP -k $kvno -e aes256-cts-hmac-sha1-96' 'dg03-wrong-password' \
-      'addent -password -p $KP -k $kvno -e aes128-cts-hmac-sha1-96' 'dg03-wrong-password' \
-      'wkt /tmp/dg03-t3.keytab' 'quit' | ktutil >/dev/null"
-    load_secret /tmp/dg03-t3.keytab
+    # ktutil can't read a password from a pipe, so instead: give the KDC a
+    # new key, then set its KVNO back. The Secret keeps the old key at the
+    # same KVNO, so the numbers match but the key does not.
+    step "t3: re-key $KP on the KDC, then set its KVNO back to $kvno"
+    kdc kadmin.local -q "cpw -randkey $KP" >/dev/null
+    kdc kadmin.local -q "modprinc -kvno $kvno $KP" >/dev/null
+    [[ $(kdc_kvno "$KP") == "$kvno" ]] || die "KDC KVNO is $(kdc_kvno "$KP"), expected $kvno"
     remint
-    record t3 /tmp/dg03-t3.keytab
+    record t3 /tmp/dg03-fresh.keytab
     ;;
 
   *) die "unknown test '$TEST' (want reset, t1, t2, t3 or t4)" ;;
