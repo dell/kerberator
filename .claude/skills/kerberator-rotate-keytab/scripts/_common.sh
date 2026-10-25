@@ -24,7 +24,12 @@ ts_ge() { [[ -n $1 && $1 != null && ! $(ts_norm "$1") < $(ts_norm "$2") ]]; }
 
 env_check() {
   if [[ -n ${KUBECONFIG:-} ]]; then
-    [[ -r $KUBECONFIG ]] || die "KUBECONFIG=$KUBECONFIG is not a readable file"
+    # KUBECONFIG may list several files separated by ':' (kubectl merges
+    # them), so it is enough that one of them is readable.
+    local f found=0
+    IFS=':' read -r -a kubeconfigs <<<"$KUBECONFIG"
+    for f in "${kubeconfigs[@]}"; do [[ -n $f && -r $f ]] && found=1; done
+    (( found )) || die "none of the files in KUBECONFIG ($KUBECONFIG) is readable"
   elif [[ ! -r $HOME/.kube/config ]]; then
     die "no kubeconfig: add 'export KUBECONFIG=\"\$HOME/<LAST_NAME>.kubeconfig\"' to ~/.bashrc and start a new session"
   fi
