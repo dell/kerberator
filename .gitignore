@@ -20,6 +20,12 @@ coverage.*
 # Local test kubeconfig
 kubeconfig
 
+# Credentials: never commit keytabs, kubeconfigs, or Kerberos ticket caches
+keytabs/
+*.keytab
+*.kubeconfig
+krb5cc_*
+
 # Local environment files
 *.env
 
