@@ -95,7 +95,7 @@ fi
 # --- 3. Per-node status ---------------------------------------------------------
 section "3. Per-node status (as the operator reports it)"
 nodes="$(kc get principals.kerberator.dell.com "$NAME" -o 'jsonpath={range .status.nodes[*]}{.name}|{.daemonPodReady}|{.reason}|{.lastObserved}|{.message}{"\n"}{end}' 2>/dev/null)"
-total=0; failing=0
+total=0; failing=0; nodemsg=""
 if [[ -z $nodes ]]; then
   echo "  (no nodes reported)"
 else
@@ -104,7 +104,8 @@ else
     # A kinit message can end in a newline, which puts its closing ")" on a
     # line of its own; only real node rows have a true/false ready field.
     [[ -n $n && ( $ready == true || $ready == false ) ]] || continue
-    total=$((total + 1)); [[ $reason == Minted ]] || failing=$((failing + 1))
+    total=$((total + 1))
+    if [[ $reason != Minted ]]; then failing=$((failing + 1)); [[ -n $nodemsg ]] || nodemsg="$msg"; fi
     printf '  %-12s %-6s %-12s %-22s %s\n' "$n" "$ready" "${reason:--}" "${seen:--}" "$msg"
   done <<<"$nodes"
 fi
@@ -113,8 +114,9 @@ fi
 section "4. Daemon pods for tenant $tenant"
 sel="app.kubernetes.io/name=kerberator-daemon,app.kubernetes.io/instance=$tenant"
 pods="$(kc get pods -l "$sel" -o 'jsonpath={range .items[*]}{.metadata.name}|{.spec.nodeName}|{.status.phase}|{.status.containerStatuses[0].ready}|{.status.containerStatuses[0].restartCount}{"\n"}{end}' 2>&1)"
+rc=$?   # capture before any other command overwrites $?
 pods_total=0; pods_ready=0; podnames=()
-if [[ $? -ne 0 ]]; then
+if [[ $rc -ne 0 ]]; then
   echo "UNAVAILABLE: $pods"
 else
   printf '  %-34s %-10s %-9s %-6s %s\n' POD NODE PHASE READY RESTARTS
@@ -138,8 +140,9 @@ fi
 # --- 5. Kerberos events for this UID ------------------------------------------------
 section "5. Kerberos events for uid $uid (newest first, full messages)"
 ev="$(kc get events -o 'jsonpath={range .items[?(@.metadata.annotations.kerberator\.dell\.com/uid)]}{.metadata.annotations.kerberator\.dell\.com/uid}|{.lastTimestamp}|{.eventTime}|{.reason}|{.involvedObject.name}|{.count}|{.message}{"\n"}{end}' 2>&1)"
+rc=$?
 latest_reason=""; latest_msg=""
-if [[ $? -ne 0 ]]; then
+if [[ $rc -ne 0 ]]; then
   echo "UNAVAILABLE: $ev"
 else
   sorted="$(while IFS='|' read -r euid last etime reason pod count msg; do
@@ -179,8 +182,9 @@ done
 # --- 7. Other Principals in the namespace ----------------------------------------------
 section "7. All Principals in namespace $ns (shared problems affect many)"
 others="$(kc get principals.kerberator.dell.com -o 'jsonpath={range .items[*]}{.metadata.name}|{.spec.tenantRef.name}|{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>&1)"
+rc=$?
 ns_total=0; ns_bad=0
-if [[ $? -ne 0 ]]; then
+if [[ $rc -ne 0 ]]; then
   echo "UNAVAILABLE: $others"
 else
   while IFS='|' read -r on otenant oready; do
@@ -199,13 +203,17 @@ case "$latest_reason" in
   KerberosMintFailed|KerberosKeytabMissing) errtext="$latest_msg" ;;
   *) errtext="$logerr" ;;
 esac
+# Events expire after about an hour and logs may be unreadable; the per-node
+# status keeps the last message, so use it when nothing newer is available.
+[[ -z $errtext && $failing -gt 0 ]] && errtext="$nodemsg"
 signature=none
 case "$(tr '[:upper:]' '[:lower:]' <<<"$errtext")" in
   *"password incorrect"*|*"preauthentication failed"*) signature=key-rejected ;;
   *"not found in kerberos database"*)                  signature=client-not-found ;;
   *"cannot contact any kdc"*|*"cannot resolve network address"*|*"cannot find kdc"*|*"kdc unreachable"*) signature=kdc-unreachable ;;
   *"clock skew"*)                                      signature=clock-skew ;;
-  *"encryption type"*|*"key table entry not found"*)  signature=enctype-or-keytab-entry ;;
+  *"no suitable keys"*|*"key table entry not found"*) signature=keytab-no-matching-key ;;
+  *"encryption type"*)                                 signature=enctype-unsupported ;;
   *"credentials have been revoked"*)                   signature=credentials-revoked ;;
   *"key table file"*|*"keytab"*"not found"*)          signature=keytab-file-missing ;;
   "") signature=none ;;

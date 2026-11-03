@@ -73,7 +73,7 @@ Lead with one line, then these parts, kept separate:
 
 | Finding | Hand off to |
 |---|---|
-| `key-rejected` or `enctype-or-keytab-entry` | `kerberator-diagnose-keytab-kvno-mismatch` (DG-03), to compare KVNOs and enctypes |
+| `key-rejected`, `keytab-no-matching-key` or `enctype-unsupported` | `kerberator-diagnose-keytab-kvno-mismatch` (DG-03), to compare the keytab's principal, KVNO and enctypes |
 | A new keytab is needed (confirmed stale or missing key) | `kerberator-rotate-keytab` (OP-04); the user must supply the keytab |
 | Disabled on purpose, should be on | `kerberator-enable-disable-principal` (OP-05) |
 | General status or listing questions | `kerberator-inspect` (OP-01) |
