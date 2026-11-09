@@ -27,16 +27,25 @@ const MinEventStaleness = 5 * time.Minute
 //
 //  1. If tenant != nil and spec.eventStalenessThreshold > 0:
 //     use that value verbatim.
-//  2. Else if tenant != nil and tenant.spec.tenant.renewMinutes > 0:
-//     use max(MinEventStaleness, 2 * renewMinutes).
-//  3. Else: return MinEventStaleness. (Tenant renew interval
-//     unknown — safe floor.)
+//  2. Else if tenant != nil: use max(MinEventStaleness, 2 * renewMinutes),
+//     where an unset renewMinutes (0) is defaulted to 30 to match the
+//     daemon's own default in tenant/daemonset.go. Without this, the
+//     operator would treat unset as "unknown" and fall through to the
+//     5-minute floor while the daemon actually renews every 30 minutes
+//     — the resulting trust window of 5 min expires 25 of every 30 min,
+//     so healthy Principals report Ready=False for most of each cycle.
+//  3. tenant == nil: return MinEventStaleness (safe floor; no Tenant to
+//     derive a window from).
 func ResolveStaleness(tenant *v1alpha1.Tenant) time.Duration {
 	if tenant != nil && tenant.Spec.EventStalenessThreshold != nil && tenant.Spec.EventStalenessThreshold.Duration > 0 {
 		return tenant.Spec.EventStalenessThreshold.Duration
 	}
-	if tenant != nil && tenant.Spec.Daemon.RenewMinutes > 0 {
-		derived := 2 * time.Duration(tenant.Spec.Daemon.RenewMinutes) * time.Minute
+	if tenant != nil {
+		renew := tenant.Spec.Daemon.RenewMinutes
+		if renew == 0 {
+			renew = 30 // matches the default in tenant/daemonset.go
+		}
+		derived := 2 * time.Duration(renew) * time.Minute
 		if derived < MinEventStaleness {
 			return MinEventStaleness
 		}
