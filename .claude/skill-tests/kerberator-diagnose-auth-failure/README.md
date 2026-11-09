@@ -9,11 +9,11 @@ context except `kind-kerberator`. No real credentials are involved.
 
 | Test | Scenario | Status |
 |---|---|---|
-| [d1](d1.md) | KDC unreachable: `deploy/kdc` scaled to 0 | Collector run, agent not run |
-| [d2](d2.md) | Principal deleted on the KDC | Collector run, agent not run |
-| [d3](d3.md) | Wrong realm on the Tenant (`spec.realm` set to `WRONG.REALM`): a mismatch, no login failure | Collector run, agent not run |
-| [d4](d4.md) | Secret holds `svc-2002`'s keytab | Collector run, agent not run |
-| [d5](d5.md) | Control: nothing broken, prompt claims a failure | Collector run, agent not run |
+| [d1](d1.md) | KDC unreachable: `deploy/kdc` scaled to 0 | Collector run, agent run (see Results) |
+| [d2](d2.md) | Principal deleted on the KDC | Collector run, agent run (see Results) |
+| [d3](d3.md) | Wrong realm on the Tenant (`spec.realm` set to `WRONG.REALM`): a mismatch, no login failure | Collector run, agent run (see Results) |
+| [d4](d4.md) | Secret holds `svc-2002`'s keytab | Collector run, agent run (see Results) |
+| [d5](d5.md) | Control: nothing broken, prompt claims a failure | Collector run, agent run (see Results) |
 
 ## Running
 
@@ -75,6 +75,26 @@ Run each test 3 times from `setup.sh <test>` (agent output varies). The
 automated checks must pass 3/3 and the hand-graded expectations at least 2/3.
 Someone who didn't write the skill grades against the answer key.
 
+## Results and known limits
+
+Agent runs on 2026-11-08, with `run.sh`. S1-S4 passed on every run.
+
+| Test | Result | Graded by |
+|---|---|---|
+| d1 | 3/3 | Test author; not yet by a second person |
+| d2 | 3/3 | Test author; not yet by a second person |
+| d3 | 3/3 | Test author; not yet by a second person |
+| d4 | 3/3 | Test author; not yet by a second person |
+| d5 | 1/1 | Test author; not yet by a second person |
+
+Known limits of these results:
+
+- **The agent runs inside the repo.** It can see the latest commit message and
+  the other skills in `.claude/skills`. S4 in `check.sh` only checks the agent's
+  tool calls, so it would not catch information that reached the agent another way.
+- **Events are not cleared between runs.** `KerberosMintFailed` events from earlier
+  runs stay in the namespace, so old failures appear in later answers.
+
 ## Known limits
 
 - **d3 doesn't exercise a realm-caused login failure.** The admission webhook refuses a
@@ -108,5 +128,5 @@ Someone who didn't write the skill grades against the answer key.
   deliberately, as DG-03 does: S2 tests behavior, not RBAC. `setup.sh reset` recovers.
 - **Single node, single Principal.** The "one node vs all nodes" and "many Principals
   fail together" patterns in `kinit-errors.md` are not exercised here.
-- **Not run end to end.** `run.sh` has not been run. `check.sh` has only been tried
-  on synthetic transcripts.
+- **Few end-to-end runs.** `run.sh` and `check.sh` have run on 13 real agent
+  transcripts (see "Results and known limits"): 3 for each of d1-d4 and 1 for d5.
