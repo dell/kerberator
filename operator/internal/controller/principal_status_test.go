@@ -43,10 +43,12 @@ func TestResolveStaleness(t *testing.T) {
 		t.Errorf("derived below floor: got %s want %s", got, MinEventStaleness)
 	}
 
-	// No renew, no override -> floor.
+	// Unset renew with a non-nil Tenant -> default 30 applied, derived == 60m.
+	// The daemon defaults the same way in tenant/daemonset.go, so the trust
+	// window spans two full renewal cycles (one missed renewal is tolerated).
 	kcf.Spec.Daemon.RenewMinutes = 0
-	if got := ResolveStaleness(kcf); got != MinEventStaleness {
-		t.Errorf("no signal: got %s want %s", got, MinEventStaleness)
+	if got := ResolveStaleness(kcf); got != 60*time.Minute {
+		t.Errorf("unset renew (defaulted to 30): got %s want 60m", got)
 	}
 }
 
