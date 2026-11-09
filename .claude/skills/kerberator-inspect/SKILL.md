@@ -1,6 +1,6 @@
 ---
 name: kerberator-inspect
-description: Read-only inspection of Kerberator Tenants and Principals via kubectl-krb. Use when asked to list, show, describe, check the status or health of, or find a Kerberator Tenant, Principal or UID (e.g. "what tenants exist", "is principal svc-2001 healthy", "why isn't uid 2001 minting", "does tenant demo exist"). Reports observed status and explains missing resources. Do NOT use for creating, rotating, editing, disabling or draining — those are out of scope.
+description: Read-only inspection of Kerberator Tenants and Principals via kubectl-krb. Use when asked to list, show, describe or find a Kerberator Tenant, Principal or UID, or to check the status or health of a Principal or UID (e.g. "what tenants exist", "describe tenant demo", "is principal svc-2001 healthy", "is uid 2001 minting", "does tenant demo exist"). Reports observed status and explains missing resources. Do NOT use to judge whether a Tenant is healthy, ok or ready, or why not (e.g. "is tenant demo ok", "health report for tenant demo") — use kerberator-diagnose-tenant. Do NOT use to explain why a Principal or UID is failing to authenticate or mint (e.g. "why isn't uid 2001 minting", "why is svc-2001 failing") — use kerberator-diagnose-auth-failure. Do NOT use for creating, rotating, editing, disabling or draining — those are out of scope.
 ---
 
 # kerberator-inspect
@@ -12,7 +12,7 @@ Inspect Kerberator's two CRDs without changing anything:
 
 ## Hard rules
 
-1. **Read-only.** Only run `scripts/inspect.sh` (which calls `kubectl krb list|describe` and reads the local kubeconfig). Never run `add-tenant`, `add-principal`, `rotate-keytab`, `edit`, `disable`, `enable`, `drain-node`, or `kubectl apply/delete/patch`. If the user wants a change, say it is outside this skill and stop.
+1. **Read-only.** Only run `scripts/inspect.py` (which calls `kubectl krb list|describe` and reads the local kubeconfig). Never run `add-tenant`, `add-principal`, `rotate-keytab`, `edit`, `disable`, `enable`, `drain-node`, or `kubectl apply/delete/patch`. If the user wants a change, say it is outside this skill and stop.
 2. **Report what was observed, not what was intended.** Quote values from the CLI output; never infer status from `spec` or from names.
 3. **Never invent output.** If the script returns an error status, report that status.
 4. **The user chooses the cluster.** Only inspect a cluster (kubeconfig context) the user named, or the only one configured. If several exist and none was named, show them and ask. Never use a kubeconfig file you found yourself (in the repo, home directory, etc.) unless the user says to; you may mention that it exists.
@@ -20,10 +20,10 @@ Inspect Kerberator's two CRDs without changing anything:
 ## Usage
 
 ```
-scripts/inspect.sh contexts [--kubeconfig F]
-scripts/inspect.sh list [-A | -n NS] [--tenant NAME] [--context C] [--kubeconfig F]
-scripts/inspect.sh describe tenant <name>    [-n NS] [--context C] [--kubeconfig F]
-scripts/inspect.sh describe principal <name> [-n NS] [--context C] [--kubeconfig F]
+scripts/inspect.py contexts [--kubeconfig F]
+scripts/inspect.py list [-A | -n NS] [--tenant NAME] [--context C] [--kubeconfig F]
+scripts/inspect.py describe tenant <name>    [-n NS] [--context C] [--kubeconfig F]
+scripts/inspect.py describe principal <name> [-n NS] [--context C] [--kubeconfig F]
 ```
 
 Output: line 1 `STATUS: <state>`, line 2 `CONTEXT: <cluster context used>`, optional `HINT:` lines, `---`, then the raw CLI output.
