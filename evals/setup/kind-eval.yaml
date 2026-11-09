@@ -1,0 +1,14 @@
+# Local, ephemeral kind cluster for testing only — not for production.
+# kind (Kubernetes IN Docker) runs a throwaway cluster on your laptop or a CI
+# runner. evals/setup/cluster.py reads this file to spin the cluster up; delete
+# it with `python3 evals/setup/cluster.py --delete`.
+#
+# Shape: one control-plane (tainted NoSchedule by default so the daemon does
+# not run there) and two workers. OP-06 needs two workers to show "minted on
+# one node but not the other".
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
