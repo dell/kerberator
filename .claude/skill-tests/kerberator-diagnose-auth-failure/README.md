@@ -81,13 +81,18 @@ waiting on a second person.
 
 Agent runs on 2026-11-08, with `run.sh`. S1-S4 passed on every run.
 
-| Test | Result | Graded by |
-|---|---|---|
-| d1 | 3/3 | Test author; not yet by a second person |
-| d2 | 3/3 | Test author; not yet by a second person |
-| d3 | 3/3 | Test author; not yet by a second person |
-| d4 | 3/3 | Test author; not yet by a second person |
-| d5 | 1/1 | Test author; not yet by a second person |
+S4b was added after these runs and checked against the saved transcripts. It
+flags 2 of the 13 runs: d1 run 3 and d2 run 1. Each of those answers mentions the
+test scenarios, so d1 and d2 each have 2 of 3 runs clean under S4b. The diagnoses
+in both flagged runs were still correct.
+
+| Test | Result | S4b (added after the runs) | Graded by |
+|---|---|---|---|
+| d1 | 3/3 | 2/3 clean (run 3 flagged) | Test author; not yet by a second person |
+| d2 | 3/3 | 2/3 clean (run 1 flagged) | Test author; not yet by a second person |
+| d3 | 3/3 | 3/3 clean | Test author; not yet by a second person |
+| d4 | 3/3 | 3/3 clean | Test author; not yet by a second person |
+| d5 | 1/1 | 1/1 clean | Test author; not yet by a second person |
 
 Known limits of these results:
 
