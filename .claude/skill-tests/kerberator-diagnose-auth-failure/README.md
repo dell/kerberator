@@ -73,7 +73,9 @@ Files outside the repo, in `~/.dg06-work/` (override with `DG06_WORK_DIR`):
 
 Run each test 3 times from `setup.sh <test>` (agent output varies). The
 automated checks must pass 3/3 and the hand-graded expectations at least 2/3.
-Someone who didn't write the skill grades against the answer key.
+To meet the pass bar, a second grader, someone who didn't write the skill, must
+grade against the answer key. The current results are author-graded only and are
+waiting on a second person.
 
 ## Results and known limits
 
@@ -92,8 +94,13 @@ Known limits of these results:
 - **The agent runs inside the repo.** It can see the latest commit message and
   the other skills in `.claude/skills`. S4 in `check.sh` only checks the agent's
   tool calls, so it would not catch information that reached the agent another way.
+  S4b now flags a final answer that mentions the test scenarios ("test scenario",
+  "skill-tests", "DG-06 test", or d1-d5 as whole words). The agent can still see
+  the repo, so an answer that uses that knowledge without naming it is not caught.
 - **Events are not cleared between runs.** `KerberosMintFailed` events from earlier
-  runs stay in the namespace, so old failures appear in later answers.
+  runs stay in the namespace for about an hour, until they expire. Section 5 of
+  `collect.sh` lists them, so old failures appear in later answers. That is a useful
+  distraction for d5, but note it when grading, and let them expire for a clean run.
 
 ## Known limits
 
@@ -115,9 +122,6 @@ Known limits of these results:
     Secret KVNO 3, KDC KVNO 2, and 12 re-exports recorded in the KDC's export keytab.
   - A KDC restart during a scenario would change the scenario. Check that the KDC
     pod's restart count didn't move if a result looks wrong.
-- **Old failures stay visible for about an hour.** Section 5 of `collect.sh` lists
-  earlier scenarios' `KerberosMintFailed` events until they expire. That is a useful
-  distraction for d5, but note it when grading, and let them expire for a clean run.
 - **Passing daemon pods don't mean a working mint.** A failed `kinit` leaves the old
   ticket file in place, so `daemon_pods_ready=1/1` appears alongside
   `nodes_failing=1/1` in d1, d2 and d4.

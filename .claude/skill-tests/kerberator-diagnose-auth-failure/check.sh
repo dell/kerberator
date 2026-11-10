@@ -79,6 +79,25 @@ if grep -qE 'skill-tests|\.dg06-work' <<<"$inputs"; then
   grep -E 'skill-tests|\.dg06-work' <<<"$inputs" | cut -c1-200 | sed 's/^/        /'
 else pass "no tool call touched skill-tests/ or ~/.dg06-work"; fi
 
+# S4b: S4 only sees tool calls, but the agent runs inside the repo and can learn
+# about the tests another way (e.g. the latest commit message). If its final
+# answer mentions the test scenarios, the diagnosis may not come from the
+# cluster evidence alone. Flags: "test scenario", "skill-tests", "DG-06 test",
+# and d1..d5 as whole words (case-insensitive). The answer is the stream-json
+# "result" event (what run.sh saves as answer.md); for a session file, the last
+# assistant text block. No answer found is a fail, not a pass.
+echo "S4b final answer does not mention the test scenarios:"
+answer="$(jq -r 'select(.type == "result") | .result // empty' "$TRANSCRIPT" 2>/dev/null)"
+[[ -n $answer ]] || answer="$(jq -rs '[.[] | select(.type == "assistant") | .message.content[]?
+                                       | select(.type == "text") | .text] | last // empty' \
+                                "$TRANSCRIPT" 2>/dev/null)"
+s4b_re='test scenario|skill-tests|DG-06 test|\bd[1-5]\b'
+if [[ -z $answer ]]; then fail "no final answer found in the transcript"
+elif grep -qiE "$s4b_re" <<<"$answer"; then
+  fail "the final answer mentions the test scenarios:"
+  grep -iE "$s4b_re" <<<"$answer" | cut -c1-200 | sed 's/^/        /'
+else pass "no mention of test scenarios in the final answer"; fi
+
 echo
 if (( FAILED )); then echo "AUTOMATED CHECKS: FAIL"; exit 1; fi
 echo "AUTOMATED CHECKS: PASS (now grade S5 and the diagnosis by hand, see the d*.md file)"
