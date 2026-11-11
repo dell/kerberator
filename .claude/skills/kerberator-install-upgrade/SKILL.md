@@ -188,4 +188,3 @@ Summarize:
 - CRD presence and served/storage versions.
 - Rollout status and pod readiness/image pull state.
 - Verified facts, assumptions, and unresolved issues, including compatibility information absent from repository sources.
-
