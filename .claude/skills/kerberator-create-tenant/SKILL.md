@@ -62,6 +62,25 @@ python3 scripts/verify_creation.py NAME -n NAMESPACE --context CONTEXT --wait-se
 
 Add `--kubeconfig PATH` if applicable. Inspect Tenant conditions, generated DaemonSet, ready/desired pods (desired > 0), and observed node coverage. If some child-resource metadata cannot be read, say so; never read Secret contents. **Report separately:** `CREATED AND READY`, `CREATED BUT NOT READY/UNVERIFIED` (include observed admission denials or other reasons), or `NOT CREATED/UNKNOWN`. Creating an empty Tenant does not prove KDC authentication or ticket minting.
 
+### When Tenant infrastructure is not ready
+
+A successfully created Tenant may not immediately have ready daemon pods. If verification fails, inspect the Tenant status, DaemonSet status, and Kubernetes events before determining the cause.
+
+For example:
+
+```bash
+kubectl -n <namespace> describe daemonset <tenant-name>-kerberator-daemon
+kubectl -n <namespace> get events --sort-by=.lastTimestamp
+```
+
+Possible causes include admission-policy restrictions, Pod Security settings, image-pull failures, scheduling constraints, or operator reconciliation errors.
+
+If Kubernetes explicitly denies daemon pod creation because of a `hostPath` volume or another security requirement, report **CREATED BUT NOT READY — blocked by cluster security policy**. Explain that the cluster administrator may need to review whether the operator-generated daemon configuration is permitted.
+
+Do not automatically modify admission policies, RBAC, namespace security labels, or the generated DaemonSet to bypass the restriction. Do not assume that every readiness failure is security-related.
+
+Clearly distinguish successful Tenant CR creation from successful infrastructure readiness and verified Kerberos functionality.
+
 ## Boundaries
 
 - No manual Kerberos configuration questionnaire. If the cluster contains no defensible realm/KDC/image evidence, stop with a precise missing-prerequisite report; do not manufacture answers.
