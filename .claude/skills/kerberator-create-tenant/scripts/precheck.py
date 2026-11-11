@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""OP-02: read-only cluster preflight for creating a Kerberator Tenant.
-Exit 0 ready (warnings possible), 1 blocked, 2 invalid usage/environment.
+"""OP-02: discover configuration and check basic Tenant creation prerequisites.
+
+Read-only. Exit 0 when creation is not blocked (warnings are possible),
+1 for a confirmed/uncertain creation blocker, 2 for invalid invocation.
+This is NOT a promise that the operator or daemon pods will be Ready.
 """
 import argparse
 import json
@@ -9,110 +12,85 @@ import shutil
 import subprocess
 import sys
 
-CHILDREN = [
+CHILDREN = (
     ('daemonsets.apps', '{name}-kerberator-daemon'),
     ('configmaps', '{name}-roster'),
     ('secrets', '{name}-keytabs'),
     ('roles.rbac.authorization.k8s.io', '{name}-kerberator-daemon-events'),
     ('rolebindings.rbac.authorization.k8s.io', '{name}-kerberator-daemon-events'),
-]
-DNS = re.compile(r'^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+)
+DNS = re.compile(r'^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$')
+IMAGE_FLAG = re.compile(r'^--daemon-image(?:=(.+))?$')
 
 
-def command(args, timeout=25, stdin=None):
+def run(argv, timeout=25):
     try:
-        p = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=timeout, check=False)
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
         return p.returncode, p.stdout.strip(), p.stderr.strip()
     except (OSError, subprocess.TimeoutExpired) as e:
         return 1, '', str(e)
 
 
-def kc(a, *args):
+def kubectl(a, *args, namespaced=True):
     cmd = ['kubectl']
     if a.kubeconfig:
         cmd += ['--kubeconfig', a.kubeconfig]
-    return command(cmd + ['--context', a.context, '--namespace', a.namespace, *args])
+    if a.context:
+        cmd += ['--context', a.context]
+    if namespaced and a.namespace:
+        cmd += ['-n', a.namespace]
+    return run(cmd + list(args))
 
 
-def get(a, resource, name):
-    # ignore-not-found distinguishes genuinely absent from forbidden/connection errors.
-    # For Secrets query metadata ONLY (never retrieve Secret .data).
-    output_args = ['-o', 'go-template={{json .metadata}}'] if resource == 'secrets' else ['-o', 'json']
-    rc, out, err = kc(a, 'get', resource, name, '--ignore-not-found', *output_args)
+def read_json(a, *args, namespaced=True):
+    rc, out, err = kubectl(a, *args, '-o', 'json', namespaced=namespaced)
+    if rc != 0:
+        raise RuntimeError(err or out or 'kubectl request failed')
+    return json.loads(out)
+
+
+def object_exists(a, kind, name, namespaced=True):
+    # Avoid retrieving Secret contents: existence is tested via resource name only.
+    rc, out, err = kubectl(a, 'get', kind, name, '--ignore-not-found',
+                           '-o', 'jsonpath={.metadata.name}', namespaced=namespaced)
     if rc:
-        raise RuntimeError(err or out or 'kubectl get failed')
-    if not out:
-        return None
-    data = json.loads(out)
-    return {'metadata': data} if resource == 'secrets' else data
+        raise RuntimeError(err or out or 'resource lookup failed')
+    return bool(out)
 
 
-def auth(a, verb, resource):
-    rc, out, err = kc(a, 'auth', 'can-i', verb, resource)
-    return rc == 0 and out.lower() == 'yes', err or out
+def can_i(a, verb, resource):
+    rc, out, err = kubectl(a, 'auth', 'can-i', verb, resource)
+    return rc == 0 and out.strip().lower() == 'yes', err or out
 
 
-def checks(a):
-    blocked, warnings = [], []
-    def require(ok, what):
-        print(('  OK    ' if ok else '  FAIL  ') + what)
-        if not ok:
-            blocked.append(what)
-    def warn(what):
-        print('  WARN  ' + what)
-        warnings.append(what)
-    contexts_cmd = ['kubectl'] + (['--kubeconfig', a.kubeconfig] if a.kubeconfig else []) + ['config', 'get-contexts', '-o', 'name']
-    rc, out, err = command(contexts_cmd)
-    require(rc == 0 and a.context in out.splitlines(), 'selected context exists')
-    if blocked:
-        return 1
-    try:
-        require(get(a, 'namespaces', a.namespace) is not None, 'target namespace exists')
-        require(get(a, 'serviceaccounts', 'default') is not None, 'default ServiceAccount exists')
-        require(get(a, 'customresourcedefinitions.apiextensions.k8s.io', 'tenants.kerberator.dell.com') is not None,
-                'Tenant CRD exists')
-        require(get(a, 'customresourcedefinitions.apiextensions.k8s.io', 'principals.kerberator.dell.com') is not None,
-                'Principal CRD exists')
-    except (RuntimeError, ValueError) as e:
-        require(False, 'cannot inspect prerequisites: ' + str(e))
-    for verb, res in [('create', 'tenants.kerberator.dell.com'), ('get', 'tenants.kerberator.dell.com'),
-                      ('get', 'daemonsets.apps'), ('get', 'configmaps'), ('get', 'secrets'),
-                      ('get', 'roles.rbac.authorization.k8s.io'),
-                      ('get', 'rolebindings.rbac.authorization.k8s.io')]:
-        ok, detail = auth(a, verb, res)
-        require(ok, f'RBAC {verb} {res}' + (f' ({detail})' if not ok else ''))
-    try:
-        require(get(a, 'tenants.kerberator.dell.com', a.name) is None, 'Tenant name is unused')
-    except (RuntimeError, ValueError) as e:
-        require(False, 'cannot determine whether Tenant exists: ' + str(e))
-    for kind, template in CHILDREN:
-        name = template.format(name=a.name)
-        try:
-            require(get(a, kind, name) is None, f'no existing child collision: {kind}/{name}')
-        except (RuntimeError, ValueError) as e:
-            require(False, f'cannot inspect {kind}/{name}: {e}')
-    # Operator location and node eligibility cannot be established from only this namespace.
-    # Ask agent to inspect intended nodes and controller scope read-only; never claim they were checked.
-    warn('Operator deployment, reconciliation scope, eligible nodes/taints, image pullability, host-cache overlap and KDC network were NOT verified; inspect before approving creation.')
-    print('RESULT: ' + ('BLOCKED' if blocked else 'READY WITH WARNINGS' if warnings else 'READY'))
-    print('NOTE: This script does not authorize creation or change Kubernetes resources.')
-    return 1 if blocked else 0
+def note(out, level, message):
+    out[level.lower()].append(message)
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('name')
-    p.add_argument('-n', '--namespace', required=True)
-    p.add_argument('--context', required=True)
-    p.add_argument('--kubeconfig')
-    a = p.parse_args()
-    if not shutil.which('kubectl'):
-        p.error('kubectl is not installed')
-    if not DNS.fullmatch(a.name) or len(a.name) > 40 or not DNS.fullmatch(a.namespace) or len(a.namespace) > 63:
-        p.error('invalid name/namespace (Tenant name <=40 chars for generated children)')
-    if not a.context or a.context.startswith('-'):
-        p.error('explicit --context is required')
-    return checks(a)
+def choose_context(a, result):
+    cmd = ['kubectl'] + (['--kubeconfig', a.kubeconfig] if a.kubeconfig else [])
+    rc, out, err = run(cmd + ['config', 'get-contexts', '-o', 'name'])
+    if rc:
+        note(result, 'blocked', 'Cannot read Kubernetes contexts: ' + (err or out))
+        return
+    contexts = [x.strip() for x in out.splitlines() if x.strip()]
+    if a.context and a.context not in contexts:
+        note(result, 'blocked', 'Selected context does not exist: ' + a.context)
+    elif not a.context:
+        if len(contexts) == 1:
+            a.context = contexts[0]
+        elif not contexts:
+            note(result, 'blocked', 'No Kubernetes contexts configured')
+        else:
+            note(result, 'blocked', 'Several contexts exist; select one with --context: ' + ', '.join(contexts))
+    if a.context:
+        result['discovered']['context'] = a.context
 
-if __name__ == '__main__':
-    sys.exit(main())
+
+def choose_namespace(a, result):
+    if a.namespace:
+        result['discovered']['namespace'] = a.namespace
+        return
+    # Resolve namespace of selected context; kubectl defaults to "default" when unset.
+    rc, out, _ = kubectl(a, 'config', 'view', '--minify',
+                         '-o', 'jsonpath={.contexts[0].context.namespace}', namespaced=False)
