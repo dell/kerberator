@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl:*)",
+      "Bash(kubectl-krb:*)",
+      "Bash(jq:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(bin/kubectl-krb:*)",
+      "Bash(./bin/kubectl-krb:*)",
+      "Bash(.claude/skills/kerberator-inspect/scripts/inspect.py:*)",
+      "Bash(.claude/skills/kerberator-diagnose-tenant/scripts/diagnose.py:*)",
+      "Bash(.claude/skills/kerberator-rotate-keytab/scripts/precheck.sh:*)",
+      "Bash(.claude/skills/kerberator-rotate-keytab/scripts/verify.sh:*)",
+      "Bash(.claude/skills/kerberator-validate-config/scripts/validate.py:*)",
+      "Bash(python3 .claude/skills/kerberator-inspect/scripts/inspect.py:*)",
+      "Bash(python3 .claude/skills/kerberator-diagnose-tenant/scripts/diagnose.py:*)",
+      "Bash(python3 .claude/skills/kerberator-validate-config/scripts/validate.py:*)",
+      "Bash(cd:*)",
+      "Bash(scripts/inspect.py:*)",
+      "Bash(scripts/diagnose.py:*)",
+      "Bash(scripts/validate.py:*)",
+      "Bash(./scripts/inspect.py:*)",
+      "Bash(./scripts/diagnose.py:*)",
+      "Bash(./scripts/validate.py:*)",
+      "Bash(../kerberator-inspect/scripts/inspect.py:*)",
+      "Bash(python3 scripts/inspect.py:*)",
+      "Bash(python3 scripts/diagnose.py:*)",
+      "Bash(python3 scripts/validate.py:*)",
+      "Bash(python3 ./scripts/inspect.py:*)",
+      "Bash(python3 ./scripts/diagnose.py:*)",
+      "Bash(python3 ./scripts/validate.py:*)",
+      "Read",
+      "Grep",
+      "Glob",
+      "Skill"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "WebFetch",
+      "WebSearch",
+      "Read(./.claude/skill-tests/evals/**)",
+      "Read(**/*.kubeconfig)",
+      "Read(~/.kube/**)"
+    ]
+  }
+}
