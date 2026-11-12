@@ -30,6 +30,7 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 from common import (  # noqa: E402
+    EVAL_CONTEXT, EVAL_KUBECONFIG, bad_image, daemon_image,
     DAEMON_PODS, PRINCIPAL, TENANT, W1, W2, ccache_on, daemon_on,
     daemon_pod_on_node, k, kn, node_is_cordoned, principal_settled,
     require_cluster, wait_for,
@@ -126,7 +127,31 @@ def _fix_drain_temp_quiesce():
     return _fix_drain_and_uncordon()
 
 
+# OP-02: create the Tenant the user asked for, as the agent should after approval.
+def _create_tenant(ns, name, image):
+    from common import krb5_conf
+    manifest = {"apiVersion": "kerberator.dell.com/v1alpha1", "kind": "Tenant",
+                "metadata": {"name": name, "namespace": ns},
+                "spec": {"realm": "EXAMPLE.COM",
+                         "daemon": {"image": image, "krb5Conf": krb5_conf("EXAMPLE.COM"),
+                                    "renewMinutes": 30, "pruneStale": False}}}
+    r = subprocess.run(["kubectl", "--kubeconfig", EVAL_KUBECONFIG, "--context", EVAL_CONTEXT,
+                        "create", "-f", "-"], input=json.dumps(manifest),
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def _fix_create_happy_path():
+    return _create_tenant("op02-happy", "payroll", daemon_image())
+
+
+def _fix_create_bad_image():
+    return _create_tenant("op02-image", "payroll", bad_image())
+
+
 FIX_FUNCS = {
+    "create-happy-path": _fix_create_happy_path,
+    "create-bad-image": _fix_create_bad_image,
     "restrict-existing-label": _fix_restrict_existing_label,
     "label-then-target": _fix_label_then_target,
     "tenant-daemon-placement": _fix_tenant_daemon_placement,
@@ -141,7 +166,8 @@ FIX_FUNCS = {
 
 # Verify scripts whose PASS requires a mutation. Cases using these must have
 # a FIX_FUNCS entry; verify is expected to FAIL before the fix and PASS after.
-MUTATING_VERIFIES = ("verify/node-targeting.py", "verify/drained-node.py")
+MUTATING_VERIFIES = ("verify/node-targeting.py", "verify/drained-node.py",
+                     "verify/tenant-created.py")
 
 
 def _run(cmdline, env_extra=None, timeout=None):
@@ -190,6 +216,16 @@ def main():
             note(f"{case_id}: no-change after setup PASS (expected)", True)
         else:
             note(f"{case_id}: no-change after setup FAIL (unexpected)", False)
+
+        # A case where no Tenant may be created must catch one being created.
+        if c.get("create") == "never":
+            if not _create_tenant("kerberator-demo", "selfcheck-probe", daemon_image()):
+                note(f"{case_id}: creating the probe Tenant FAILED", False)
+            elif _run(verify).returncode == 0:
+                note(f"{case_id}: verify after a wrong create PASS (unexpected: it would miss the mistake)", False)
+            else:
+                note(f"{case_id}: verify after a wrong create FAIL (expected)", True)
+            continue
 
         if not any(verify.startswith(v) for v in MUTATING_VERIFIES):
             continue
