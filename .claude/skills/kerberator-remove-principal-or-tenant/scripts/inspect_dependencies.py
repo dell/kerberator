@@ -81,7 +81,13 @@ def main():
     parser.add_argument("-n", "--namespace", required=True)
     parser.add_argument("--context", required=True)
     parser.add_argument("--json", action="store_true", help="Output structured dependency report")
+    parser.add_argument(
+        "--limited-inspection", action="store_true",
+        help="Report RBAC-denied Tenant child checks as UNKNOWN for disposable tests",
+    )
     args = parser.parse_args()
+    if args.limited_inspection and args.kind != "tenant":
+        parser.error("--limited-inspection is only supported for Tenant deletion")
     if not shutil.which("kubectl"):
         parser.error("kubectl is not installed")
     if not DNS_NAME.fullmatch(args.name) or not DNS_NAME.fullmatch(args.namespace):
@@ -97,6 +103,7 @@ def main():
         "secrets": [],
         "daemonset": None,
         "tenant_children": [],
+        "limited_inspection": args.limited_inspection,
         "warnings": [],
         "blockers": [],
         "automatic_cleanup_allowed": False,
@@ -154,34 +161,58 @@ def main():
                 report["warnings"].append(f"Cannot inspect Secret {secret} metadata: {secret_err}")
         for resource, name_template in TENANT_CHILDREN:
             child = name_template.format(name=args.name)
-            output, child_err = kc(
-                args.context, args.namespace, "get", resource, child,
-                "--ignore-not-found", "-o", "name",
+            # Only an explicit authorization denial is downgraded in limited
+            # mode. API failures, malformed responses and unexpected errors
+            # remain blockers regardless of mode.
+            access, access_error = kc(
+                args.context, args.namespace, "auth", "can-i", "get", f"{resource}/{child}"
             )
+
+            if access is None and access_error == "no":
+                access, access_error = "no", None
+
+            if access_error or access not in ("yes", "no"):
+                child_error = f"Cannot determine read access: {access_error or access}"
+                exists = None
+                report["blockers"].append(
+                    f"Cannot inspect Tenant child {resource}/{child}: {child_error}"
+                )
+            elif access == "no":
+                child_error = "RBAC denies get"
+                exists = None
+                message = f"UNKNOWN: Tenant child {resource}/{child} (RBAC denies get)"
+                if args.limited_inspection:
+                    report["warnings"].append(message)
+                else:
+                    report["blockers"].append(message)
+            else:
+                output, child_error = kc(
+                    args.context, args.namespace, "get", resource, child,
+                    "--ignore-not-found", "-o", "name",
+                )
+                exists = bool(output) if child_error is None else None
+                if child_error:
+                    report["blockers"].append(
+                        f"Cannot inspect Tenant child {resource}/{child}: {child_error}"
+                    )
+                elif exists:
+                    report["warnings"].append(
+                        f"Tenant child {output} exists and will be subject to background cascading deletion"
+                    )
             item = {
                 "resource": resource,
                 "name": child,
-                "exists": bool(output) if child_err is None else None,
-                "inspection_error": child_err,
+                "exists": exists,
+                "inspection_error": child_error,
             }
             report["tenant_children"].append(item)
-            if child_err:
-                report["blockers"].append(
-                    f"Cannot inspect Tenant child {resource}/{child}: {child_err}"
-                )
-            elif output:
-                report["warnings"].append(
-                    f"Tenant child {output} exists and will be subject to background cascading deletion"
-                )
             if resource == "daemonsets.apps":
                 report["daemonset"] = {
                     "name": child,
-                    "exists": item["exists"],
-                    "inspection_error": child_err,
+                    "exists": exists,
+                    "inspection_error": child_error,
                 }
-        report["warnings"].append(
-            "Tenant deletion may affect active node credentials and workloads"
-        )
+        report["warnings"].append("Tenant deletion may affect active node credentials and workloads")
 
     report["status"] = "BLOCKED" if report["blockers"] else "INSPECTED WITH WARNINGS" if report["warnings"] else "INSPECTED"
     if args.json:
@@ -196,7 +227,7 @@ def main():
         for p in report["principals"]:
             print(f"  INFO  dependent Principal: {p['name']} (uid={p['uid']}, secret={p['secret']})")
         for child in report["tenant_children"]:
-            state = "unknown" if child["exists"] is None else str(child["exists"]).lower()
+            state = "UNKNOWN" if child["exists"] is None else str(child["exists"]).lower()
             print(f"  INFO  Tenant child: {child['resource']}/{child['name']} exists={state}")
         for s in report["secrets"]:
             print(f"  INFO  referenced Secret: {s['name']} (exists={s['exists']}; contents not read)")

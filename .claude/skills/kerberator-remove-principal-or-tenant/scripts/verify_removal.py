@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""OP-10: independently verify removal of a Principal or Tenant (read-only).
+"""OP-10: independently verify Principal/Tenant removal (read-only).
 
-Polls the original target and, for Tenants, every exact controller-owned child
-for a bounded period after background cascading deletion.
-Status: VERIFIED (exit 0), PENDING or FAILED/INCOMPLETE (exit 1).
-Invalid usage/environment: exit 2. Does not modify cluster resources.
+For Tenant deletion, distinguish removal of the Tenant CR from confirmation
+of its controller-owned children. Inaccessible child resources are UNKNOWN,
+never assumed absent. Optional --limited-inspection records the mode used
+for a disposable test Tenant but never weakens verification requirements.
+
+Exit 0 = VERIFIED; 1 = PENDING, FAILED, or INCOMPLETE;
+2 = invalid usage/environment. No Kubernetes mutations.
 """
 
 import argparse
@@ -55,11 +58,11 @@ def get_json(context, namespace, resource, name=None):
 
 
 def observe_target(args):
-    # --ignore-not-found returns success with empty stdout for an absent object,
-    # while access and connection failures retain nonzero exit codes.
+    # --ignore-not-found: successful empty output means ABSENT; RBAC/API errors
+    # stay nonzero and must NOT be interpreted as absence.
     rc, out, err = kc(
         args.context, args.namespace, "get", RESOURCES[args.kind],
-        args.name, "--ignore-not-found", "-o", "json"
+        args.name, "--ignore-not-found", "-o", "json",
     )
     if rc:
         return "INCOMPLETE", None, f"Cannot verify target: {err or out}"
@@ -87,8 +90,8 @@ def observe_tenant_children(args):
     children = []
     errors = []
     remaining = False
-    for resource, name_template in TENANT_CHILDREN:
-        name = name_template.format(name=args.name)
+    for resource, template in TENANT_CHILDREN:
+        name = template.format(name=args.name)
         rc, out, err = kc(
             args.context, args.namespace, "get", resource, name,
             "--ignore-not-found", "-o", "name",
@@ -97,12 +100,14 @@ def observe_tenant_children(args):
             "resource": resource,
             "name": name,
             "exists": None if rc else bool(out),
+            "status": "UNKNOWN" if rc else "PRESENT" if out else "ABSENT",
         }
-        children.append(item)
         if rc:
+            item["inspection_error"] = err or out
             errors.append(f"Cannot inspect Tenant child {resource}/{name}: {err or out}")
         elif out:
             remaining = True
+        children.append(item)
     return children, errors, remaining
 
 
@@ -115,12 +120,18 @@ def main():
     parser.add_argument("--expected-uid", help="Original metadata.uid recorded before deletion")
     parser.add_argument("--secret", help="Optional referenced Secret, metadata-only check")
     parser.add_argument("--json", action="store_true", help="Emit one JSON report")
+    parser.add_argument(
+        "--limited-inspection", action="store_true",
+        help="Mark disposable Tenant verification as limited by RBAC (does not waive checks)",
+    )
     parser.add_argument("--wait-seconds", type=float, default=120,
                         help="Maximum time to poll while terminating (default: 120)")
     parser.add_argument("--interval-seconds", type=float, default=5,
                         help="Delay between termination checks (default: 5)")
     args = parser.parse_args()
 
+    if args.limited_inspection and args.kind != "tenant":
+        parser.error("--limited-inspection is only supported for Tenant verification")
     if not shutil.which("kubectl"):
         parser.error("kubectl is missing")
     if not DNS_NAME.fullmatch(args.name) or not DNS_NAME.fullmatch(args.namespace):
@@ -137,8 +148,11 @@ def main():
         "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "target": {"kind": args.kind, "name": args.name,
                    "namespace": args.namespace, "context": args.context},
+        "limited_inspection": args.limited_inspection,
         "expected_uid": args.expected_uid,
         "target_absent": None,
+        "target_status": "INCOMPLETE",
+        "cleanup_status": "NOT_APPLICABLE" if args.kind == "principal" else "NOT_CHECKED",
         "deletion_timestamp": None,
         "finalizers": [],
         "attempts": 0,
@@ -165,8 +179,10 @@ def main():
         time.sleep(min(args.interval_seconds, max(0, deadline - time.monotonic())))
 
     report["target_absent"] = state == "ABSENT"
+    report["target_status"] = "VERIFIED_REMOVED" if state == "ABSENT" else state
 
-    # Check post-deletion dependencies only after absence is established.
+    # Post-deletion checks require an absent Tenant CR. No assumptions are made
+    # about hidden children when the caller lacks permission to get them.
     if state == "ABSENT" and args.kind == "tenant":
         principals, error, _ = get_json(args.context, args.namespace, RESOURCES["principal"])
         if error:
@@ -184,21 +200,30 @@ def main():
                     "Principals still reference deleted Tenant: "
                     + ", ".join(report["remaining_principals"])
                 )
+
         while True:
             report["child_attempts"] += 1
             children, errors, children_remain = observe_tenant_children(args)
             report["tenant_children"] = children
-            report["failures"].extend(errors)
-            daemon = next(
-                child for child in children if child["resource"] == "daemonsets.apps"
-            )
+            daemon = next(c for c in children if c["resource"] == "daemonsets.apps")
             report["associated_daemonset"] = {
-                "name": daemon["name"],
-                "exists": daemon["exists"],
+                "name": daemon["name"], "exists": daemon["exists"],
             }
+            # On RBAC errors a further attempt cannot prove cleanup; report
+            # the error instead of waiting for the timeout.
             if errors or not children_remain or time.monotonic() >= deadline:
+                report["failures"].extend(errors)
                 break
             time.sleep(min(args.interval_seconds, max(0, deadline - time.monotonic())))
+
+        if report["remaining_principals"]:
+            report["cleanup_status"] = "FAILED"
+        elif errors or error:
+            report["cleanup_status"] = "INCOMPLETE"
+        elif children_remain:
+            report["cleanup_status"] = "PENDING"
+        else:
+            report["cleanup_status"] = "VERIFIED"
 
     if args.secret:
         rc, out, err = kc(args.context, args.namespace, "get", "secret", args.secret,
@@ -211,15 +236,12 @@ def main():
                 "Secret status is informational; OP-10 does not authorize Secret deletion"
             )
 
-    if report["failures"]:
-        report["status"] = "FAILED" if state == "FAILED" or report["remaining_principals"] else "INCOMPLETE"
+    if state == "FAILED" or report["cleanup_status"] == "FAILED":
+        report["status"] = "FAILED"
     elif state == "ABSENT":
         report["status"] = (
-            "PENDING"
-            if args.kind == "tenant" and any(
-                child["exists"] is True for child in report["tenant_children"]
-            )
-            else "VERIFIED"
+            "VERIFIED" if args.kind == "principal" or report["cleanup_status"] == "VERIFIED"
+            else report["cleanup_status"]
         )
     else:
         report["status"] = state
@@ -231,8 +253,10 @@ def main():
         print(f"== OP-10 verify removal: {target['kind']}/{target['name']} ==")
         print(f"  INFO  context={target['context']} namespace={target['namespace']}")
         print(f"  INFO  observations={report['attempts']}")
+        print(f"  INFO  target_status={report['target_status']}")
         if args.kind == "tenant":
             print(f"  INFO  child observations={report['child_attempts']}")
+            print(f"  INFO  cleanup_status={report['cleanup_status']}")
         if state == "ABSENT":
             print("  OK    target is absent")
         elif state == "PENDING":
@@ -248,7 +272,7 @@ def main():
             daemon = report["associated_daemonset"]
             print(f"  INFO  DaemonSet {daemon['name']} exists={daemon['exists']}")
         for child in report["tenant_children"]:
-            print(f"  INFO  Tenant child {child['resource']}/{child['name']} exists={child['exists']}")
+            print(f"  INFO  Tenant child {child['resource']}/{child['name']} status={child['status']}")
         for warning in report["warnings"]:
             print(f"  WARN  {warning}")
         for failure in report["failures"]:
