@@ -52,6 +52,15 @@ EVAL_TAINT_KEYS = ["dedicated"]
 
 BASELINE = f"{EVAL_STATE}/baseline.json"
 
+# Objects an eval creates outside the demo namespace (namespaces, service
+# accounts, cluster roles) carry this label. reset.py deletes everything with
+# it, so it never deletes something it did not create.
+EVAL_OWNED_LABEL = "kerberator.dell.com/eval-owned"
+
+# Files the user "has" in the agent's working directory (e.g. ./krb5.conf).
+# Setup writes them here; run.py copies them into the agent's workspace.
+CASE_FILES = f"{EVAL_STATE}/case-files"
+
 os.makedirs(EVAL_STATE, exist_ok=True)
 
 
@@ -307,8 +316,19 @@ def snapshot():
     )
     node_items = k_json("get", "nodes").get("items", [])
     nodes = _canon_nodes(node_items)
+    # Every Tenant in every namespace, so an eval where the agent must not
+    # create one fails if it does (the `tenant` key above is only `demo`).
+    tenants = sorted(
+        [{"namespace": it["metadata"]["namespace"], "name": it["metadata"]["name"],
+          "spec": it.get("spec")}
+         for it in k_json("get", "tenants", "-A").get("items", [])],
+        key=lambda x: (x["namespace"], x["name"]),
+    )
+    namespaces = sorted(it["metadata"]["name"]
+                        for it in k_json("get", "namespaces").get("items", []))
     return {"tenant": tenant, "principals": principals,
-            "daemonset": daemonset, "secrets": secrets, "nodes": nodes}
+            "daemonset": daemonset, "secrets": secrets, "nodes": nodes,
+            "tenants": tenants, "namespaces": namespaces}
 
 
 def save_baseline():
@@ -368,3 +388,60 @@ def daemon_pod_on_node(name):
         if ready:
             return md.get("name")
     return None
+
+
+# ----- Tenant creation (OP-02) -----
+def daemon_image():
+    """The daemon image the operator was installed with: Tenant demo sets no
+    image, so its DaemonSet runs the operator's --daemon-image default."""
+    ds = kn_json("get", "daemonset", DS)
+    return ds["spec"]["template"]["spec"]["containers"][0]["image"]
+
+
+def bad_image():
+    """Same repository as daemon_image(), with a tag that does not exist."""
+    return daemon_image().rsplit(":", 1)[0] + ":v0.0.0-does-not-exist"
+
+
+def resolve_image(token):
+    """@daemon-image / @bad-image -> the real image; anything else as-is."""
+    return {"@daemon-image": daemon_image, "@bad-image": bad_image}.get(
+        token, lambda: token)()
+
+
+def krb5_conf(realm):
+    """A krb5.conf for the demo KDC, written for `realm`. With a realm other
+    than EXAMPLE.COM it is a stale template: the KDC serves EXAMPLE.COM."""
+    return (f"[libdefaults]\n"
+            f"  default_realm = {realm}\n"
+            f"  dns_lookup_kdc = false\n"
+            f"  dns_lookup_realm = false\n"
+            f"[realms]\n"
+            f"  {realm} = {{\n"
+            f"    kdc = kdc.{EVAL_NS}.svc.cluster.local:88\n"
+            f"  }}\n")
+
+
+def write_case_file(name, text):
+    """Put a file in the agent's working directory (copied in by run.py)."""
+    os.makedirs(CASE_FILES, exist_ok=True)
+    pathlib.Path(CASE_FILES, name).write_text(text)
+
+
+def make_namespace(name):
+    """Create a namespace that reset.py will delete again."""
+    r = k("create", "namespace", name)
+    if r.returncode != 0 and "AlreadyExists" not in r.stderr:
+        die(f"create namespace {name} failed: {r.stderr.strip()}")
+    k("label", "namespace", name, f"{EVAL_OWNED_LABEL}=true", "--overwrite", check=False)
+
+
+def tenant_json(ns, name):
+    return k_json("-n", ns, "get", "tenant", name)
+
+
+def condition(obj, ctype):
+    for c in (obj.get("status", {}) or {}).get("conditions") or []:
+        if c.get("type") == ctype:
+            return c.get("status") or ""
+    return ""

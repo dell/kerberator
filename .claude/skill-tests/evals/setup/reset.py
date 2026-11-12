@@ -8,12 +8,15 @@ changes no spec, label or taint; it only replaces the daemon pods again.
 import base64
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
 from common import (  # noqa: E402
+    CASE_FILES, EVAL_OWNED_LABEL,
     DAEMON_PODS, DS, EVAL_CONTEXT, EVAL_KUBECONFIG, EVAL_LABEL_KEYS,
     EVAL_NS, EVAL_TAINT_KEYS, PRINCIPAL, REPO_ROOT, TENANT, W1, W2,
     ccache_nodes, ccache_on, daemon_on, die, k, k_json, kn, kn_json,
@@ -46,10 +49,14 @@ def main():
     # agent added with edit/patch are removed.
     for f in ("tenant", "principal"):
         manifest = pathlib.Path(REPO_ROOT) / "examples" / "quickstart" / f"{f}.yaml"
-        if kn("get", "-f", str(manifest)).returncode == 0:
-            r = kn("replace", "-f", str(manifest))
-        else:
-            r = kn("create", "-f", str(manifest))
+        for _ in range(5):  # the operator may update the object at the same moment
+            if kn("get", "-f", str(manifest)).returncode == 0:
+                r = kn("replace", "-f", str(manifest))
+            else:
+                r = kn("create", "-f", str(manifest))
+            if r.returncode == 0 or "Conflict" not in r.stderr:
+                break
+            time.sleep(2)
         if r.returncode != 0:
             die(f"apply {manifest} failed: {r.stderr.strip()}")
 
@@ -59,9 +66,29 @@ def main():
         if p and p != PRINCIPAL:
             kn("delete", "principal", p, "--wait=false")
 
+    # 3b. Remove Tenants an eval (or an agent) created, in any namespace,
+    # then the namespaces, accounts and roles evals created (labelled).
+    try:
+        tenants = k_json("get", "tenants", "-A").get("items", [])
+    except Exception as e:
+        die(f"could not list Tenants: {e}")
+    for t in tenants:
+        ns, name = t["metadata"]["namespace"], t["metadata"]["name"]
+        if (ns, name) != (EVAL_NS, TENANT):
+            r = k("-n", ns, "delete", "tenant", name, "--wait=true", "--timeout=120s")
+            if r.returncode != 0 and "NotFound" not in r.stderr:
+                die(f"delete tenant {ns}/{name} failed: {r.stderr.strip()}")
+    owned = f"{EVAL_OWNED_LABEL}=true"
+    k("delete", "namespace", "-l", owned, "--wait=true", "--timeout=180s")
+    k("delete", "clusterrolebinding,clusterrole", "-l", owned)
+    k("delete", "serviceaccount", "-A", "-l", owned)
+    shutil.rmtree(CASE_FILES, ignore_errors=True)
+
     # 4. The keytab Secret must hold the KDC's CURRENT key.
     kt_key = f"{PRINCIPAL}.keytab"
-    kdc_env = "export KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf"
+    # Same environment as the KDC's bootstrap.sh, which sets no
+    # KRB5_KDC_PROFILE: its database is in the image's default location.
+    kdc_env = "true"
     cmd = (f"{kdc_env}; rm -f /tmp/cur.kt; "
            f"kadmin.local -q 'ktadd -k /tmp/cur.kt -norandkey {PRINCIPAL}@EXAMPLE.COM' "
            f">/dev/null 2>&1 && klist -k -K /tmp/cur.kt | tail -n +4 | sort | sha256sum")
