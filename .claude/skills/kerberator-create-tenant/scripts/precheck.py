@@ -63,9 +63,15 @@ def exists(a, resource, name, namespace=None):
 
 def can(a, verb, resource, namespace):
     rc, out, err = kubectl(a, 'auth', 'can-i', verb, resource, namespace=namespace)
-    if rc or out.lower() not in ('yes', 'no'):
-        raise RuntimeError(err or out or 'authorization check failed')
-    return out.lower() == 'yes'
+    answer = out.strip().lower()
+
+    if answer == 'yes' and rc == 0:
+        return True
+
+    if answer == 'no':
+        return False
+
+    raise RuntimeError(err or out or 'authorization check failed')
 
 
 def warning(result, message):
