@@ -3,13 +3,18 @@
 set -o pipefail
 source "$(dirname "$0")/_common.sh"
 parse_args "$@"; env_check
-printf '== OP-03 verification (%s) ==\n' "$(now_utc)"
-raw=$(kc get principal "$NAME" -o json 2>/dev/null)
-if [[ $? -ne 0 ]]; then fail "Principal $NAME not found/readable"; echo 'RESULT: NOT VERIFIED'; exit 1; fi
-# Verify exact spec and health from Principal JSON only; no Secret values.
-export OP03_UID="$TARGET_UID" OP03_PRINCIPAL="$PRINCIPAL" OP03_TENANT="$TENANT" OP03_SECRET="$SECRET" OP03_KEY="$SECRET_KEY"
-export OP03_SELECTORS="$(printf '%s\n' "${SELECTORS[@]}")"
-if ! printf '%s' "$raw" | python3 -c '
+verify_once() {
+  fail_count=0
+  printf '== OP-03 verification (%s) ==\n' "$(now_utc)"
+  local raw
+  if ! raw=$(kc get principal "$NAME" -o json 2>/dev/null); then
+    fail "Principal $NAME not found/readable"
+    return 1
+  fi
+  # Verify exact spec and health from Principal JSON only; no Secret values.
+  export OP03_UID="$TARGET_UID" OP03_PRINCIPAL="$PRINCIPAL" OP03_TENANT="$TENANT" OP03_SECRET="$SECRET" OP03_KEY="$SECRET_KEY"
+  export OP03_SELECTORS="$(printf '%s\n' "${SELECTORS[@]}")"
+  if ! printf '%s' "$raw" | python3 -c '
 import json,os,sys
 try: d=json.load(sys.stdin)
 except Exception as e: print("  FAIL  Principal JSON unreadable:",e);sys.exit(1)
@@ -36,6 +41,24 @@ if isinstance(desired,int) and desired>0 and observed==desired and len(nodes)>=d
 else:print("  FAIL  Tenant/node coverage not confirmed",observed,"/",desired);bad=True
 sys.exit(1 if bad else 0)
 '; then fail 'Principal spec or health checks not verified'; fi
-if can get secrets && kc get secret "$SECRET" -o name >/dev/null 2>&1; then ok 'referenced Secret exists (contents not read)'; else fail 'referenced Secret is absent or unreadable'; fi
-if ((fail_count)); then echo 'RESULT: NOT VERIFIED'; exit 1; fi
-echo 'RESULT: VERIFIED'
+  if can get secrets && kc get secret "$SECRET" -o name >/dev/null 2>&1; then
+    ok 'referenced Secret exists (contents not read)'
+  else
+    fail 'referenced Secret is absent or unreadable'
+  fi
+  ((fail_count == 0))
+}
+
+deadline=$((SECONDS + 180))
+while :; do
+  verify_once
+  if ((fail_count == 0)); then echo 'RESULT: VERIFIED'; exit 0; fi
+
+  remaining=$((deadline - SECONDS))
+  if ((remaining <= 0)); then echo 'RESULT: NOT VERIFIED'; exit 1; fi
+  info 'Verification incomplete; retrying in 15 seconds'
+  sleep_for=15
+  ((remaining < sleep_for)) && sleep_for=$remaining
+  sleep "$sleep_for"
+  if ((SECONDS >= deadline)); then echo 'RESULT: NOT VERIFIED'; exit 1; fi
+done

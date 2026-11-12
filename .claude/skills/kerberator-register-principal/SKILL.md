@@ -64,7 +64,7 @@ Wait for a clear affirmative response to **this specific creation**. Do not take
 Use the approved exact values:
 
 ```bash
-kubectl --context <context> krb -n <namespace> add-principal <tenant> <uid> \
+kubectl krb -n <namespace> add-principal <tenant> <uid> \
   --keytab-file <local-keytab-path> \
   --principal <name@REALM>
 ```
@@ -105,7 +105,7 @@ kubectl --context <context> krb -n <namespace> describe principal <name>
 kubectl --context <context> krb -n <namespace> list
 ```
 
-Verify UID, identity, Tenant reference, Secret name/key, and any selectors against the approved inputs. For the local-file path, verify that the expected Secret exists **without reading its contents**. Check `Ready` and the per-node reasons. If reconciliation is still progressing, allow one bounded follow-up status check (roughly 30 seconds later). Do not loop indefinitely or change resources to force readiness.
+Verify UID, identity, Tenant reference, Secret name/key, and any selectors against the approved inputs. For the local-file path, verify that the expected Secret exists **without reading its contents**. Check `Ready` and the per-node reasons.If reconciliation is still progressing, allow up to 180 seconds for verification, checking every 15 seconds. Stop early if Ready=True, all expected nodes report Minted, and Tenant coverage is complete. If the timeout expires, report REGISTERED, NOT YET VERIFIED HEALTHY with the latest observed status. Do not loop indefinitely or change resources to force readiness.
 
 `READY=True`, expected node coverage, and `Minted` on each applicable node support a healthy result. Otherwise report `REGISTERED, NOT YET VERIFIED HEALTHY` or `FAILED`, citing actual status and events. Do not promise that all workloads already have valid tickets just because the CR exists.
 
