@@ -91,7 +91,7 @@ End with a short report in two parts, and keep them separate:
 | `has no keytabSecretRef` | Nothing to rotate | Stop; report it. |
 | `Forbidden` / precheck `cannot ...` | Account lacks permission | Stop; name the missing permission. Do not try other commands to get around it. |
 | `timed out waiting for re-mint (still: X/Y minted)` | Rotation applied, some nodes did not re-mint | Do not re-run rotate. Run `verify.sh`, then `kubectl krb describe principal <name>` and `kubectl krb events --uid <uid>`, and report the failing nodes and their messages. |
-| `KerberosMintFailed` with `Password incorrect while getting initial credentials` or `Preauthentication failed` | The KDC rejected the key: the file is older than the KDC's current key (KVNO mismatch) | Report the evidence and ask for a fresh export from the KDC; rotating that fresh file fixes it. Diagnosing further is DG-03. |
+| `KerberosMintFailed` with `Password incorrect while getting initial credentials` or `Preauthentication failed` | The KDC rejected the key: the file is older than the KDC's current key (KVNO mismatch) | Report the evidence and ask for a fresh export from the KDC; rotating that fresh file fixes it. Diagnosing further is `kerberator-diagnose-auth-failure` (DG-02). |
 | `KerberosMintFailed` with `KDC unreachable` / `Cannot contact any KDC` | Network or KDC problem, not the keytab | Report it; do not rotate again. |
 | verify: KVNO 0 | Operator cannot parse the Secret | Report it; the uploaded file is probably not a keytab. |
 
@@ -111,5 +111,5 @@ if the KDC still accepts that key, so never suggest it without saying so.
 ## Out of scope
 
 Generating or re-exporting keytabs on the KDC, creating Principals
-(OP-03), and diagnosing why a KDC rejects a key (DG-03). Say so and stop
+(OP-03), and diagnosing why a KDC rejects a key (`kerberator-diagnose-auth-failure` (DG-02)). Say so and stop
 when a request needs one of these.

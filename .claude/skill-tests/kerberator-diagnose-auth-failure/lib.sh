@@ -27,7 +27,7 @@ AGG_SECRET="${TENANT}-keytabs"        # the operator's aggregate of keytab Secre
 
 _LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(git -C "$_LIB_DIR" rev-parse --show-toplevel)"
-COLLECT="$REPO/.claude/skills/kerberator-diagnose-auth-failure/scripts/collect.sh"
+COLLECT="$REPO/.claude/skills/kerberator-diagnose-auth-failure/scripts/collect.py"
 QUICKSTART_TENANT="$REPO/examples/quickstart/tenant.yaml"  # known-good Tenant spec
 ROSTER_CM="${TENANT}-roster"          # the operator copies krb5Conf into this
 
