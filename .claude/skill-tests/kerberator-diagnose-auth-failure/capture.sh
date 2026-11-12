@@ -18,10 +18,10 @@ OUT="$RESULT_DIR/$NAME.collect.txt"
 SIG="$RESULT_DIR/$NAME.signals.txt"
 
 rc=0
-bash "$COLLECT" "$CR" -n "$NS" >"$OUT" 2>&1 || rc=$?
+python3 "$COLLECT" "$CR" -n "$NS" >"$OUT" 2>&1 || rc=$?
 sed -n '/^== 8\. SIGNALS ==$/,$p' "$OUT" >"$SIG"
 
-step "SIGNALS for $NAME (collect.sh exit $rc)"
+step "SIGNALS for $NAME (collect.py exit $rc)"
 cat "$SIG"
 
 KEY="$KEY_DIR/$NAME.txt"
