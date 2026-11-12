@@ -26,6 +26,10 @@ keytabs/
 *.kubeconfig
 krb5cc_*
 
+# Python bytecode from skill scripts and tests
+__pycache__/
+*.pyc
+
 # Local environment files
 *.env
 
