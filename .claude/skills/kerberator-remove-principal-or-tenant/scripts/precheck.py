@@ -85,7 +85,15 @@ def main():
     parser.add_argument("name")
     parser.add_argument("-n", "--namespace", required=True)
     parser.add_argument("--context", required=True)
+    parser.add_argument(
+        "--limited-inspection",
+        action="store_true",
+        help="Allow RBAC-restricted child inspection for disposable test Tenants",
+    )
     args = parser.parse_args()
+
+    if args.limited_inspection and args.kind != "tenant":
+        parser.error("--limited-inspection is only supported for Tenant deletion")
 
     if not shutil.which("kubectl"):
         parser.error("kubectl is not installed")
@@ -145,8 +153,23 @@ def main():
             checks.ok("no Principals reference this Tenant in the namespace")
         for resource, name_template in TENANT_CHILDREN:
             child = name_template.format(name=args.name)
-            if not allowed(args.context, args.namespace, "get", resource, child):
-                checks.fail(f"cannot inspect Tenant child {resource}/{child}")
+            # A deliberate RBAC denial may be reported as UNKNOWN in opt-in
+            # limited mode; API errors and other unexpected failures still block.
+            permission, permission_err = kubectl(
+                args.context, args.namespace, "auth", "can-i", "get", f"{resource}/{child}"
+            )
+
+            if permission is None and permission_err == "no":
+                 permission, permission_err = "no", None
+
+            if permission_err or permission not in ("yes", "no"):
+                checks.fail(f"cannot determine read permission for Tenant child {resource}/{child}: {permission_err or permission}")
+                continue
+            if permission == "no":
+                if args.limited_inspection:
+                    checks.warn(f"UNKNOWN: cannot inspect Tenant child {resource}/{child} (RBAC denies get)")
+                else:
+                    checks.fail(f"cannot inspect Tenant child {resource}/{child}")
                 continue
             found, child_err = kubectl(
                 args.context, args.namespace, "get", resource, child,
