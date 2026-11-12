@@ -52,7 +52,7 @@ def validate(obj, a):
     if 'image' in daemon and (not isinstance(daemon['image'], str) or not daemon['image'] or not any(x in daemon['image'] for x in '/:')):
         raise ValueError('explicit daemon image must contain / or :')
     conf = daemon.get('krb5Conf')
-    if conf is not None and (not isinstance(conf, str) or (conf and ('[realms]' not in conf or realm not in conf))):
+    if conf is not None and (not isinstance(conf, str) or (conf and ('[realms]' not in conf or not re.search(rf'(?m)^\s*{re.escape(realm)}\s*=', conf)))):
         raise ValueError('krb5Conf must include [realms] and the exact realm')
     if not conf:
         print('WARN: krb5Conf omitted/empty; confirm custom image supplies configuration before creation')

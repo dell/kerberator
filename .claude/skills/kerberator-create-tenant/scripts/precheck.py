@@ -158,7 +158,7 @@ def namespaces(a, result):
     if len(eligible) > 1:
         result['choices']['namespaces'] = eligible
     else:
-        warning(result, 'No unique eligible namespace discovered; supply --namespace after inspecting choices/RBAC')
+        block(result, 'No namespace has RBAC permission to create Tenants')
         result['choices']['namespaces'] = names or result['discovered']['visible_namespaces']
     return False
 
@@ -210,7 +210,7 @@ def discover_tenant_config(a, result):
                     '-o', 'jsonpath={.spec.daemon.krb5Conf}', namespace=t['namespace'])
                 if rc:
                     raise RuntimeError(err or out)
-                if '[realms]' in out and a.realm in out:
+                if '[realms]' in out and re.search(rf'(?m)^[ \t]*{re.escape(a.realm)}[ \t]*=', out):
                     result['discovered']['krb5_conf'] = out
                     result['discovered']['krb5_conf_source'] = t['namespace'] + '/' + t['name']
                     break
@@ -286,23 +286,54 @@ def discover_kdc(a, result):
         warning(result, 'Cannot inspect KDC Services cluster-wide: ' + str(e))
 
 
+
 def precheck(a, result):
     if not a.namespace or not a.name:
         return
+
     try:
         if not exists(a, 'namespaces', a.namespace):
             block(result, 'Namespace does not exist: ' + a.namespace)
     except RuntimeError as e:
         # Namespace get may be denied despite working namespaced API access.
         warning(result, 'Cannot directly inspect Namespace object: ' + str(e))
+
     for verb in ('create', 'get'):
         try:
             if not can(a, verb, 'tenants.kerberator.dell.com', a.namespace):
                 block(result, 'Missing permission: ' + verb + ' tenants in ' + a.namespace)
         except RuntimeError as e:
             block(result, 'Cannot verify Tenant ' + verb + ' permission: ' + str(e))
-    for resource, name in [('tenants.kerberator.dell.com', a.name)] + [
-        (kind, pattern.format(name=a.name)) for kind, pattern in CHILDREN]:
+
+    # Tenant name collision: mandatory check.
+    try:
+        if exists(a, 'tenants.kerberator.dell.com', a.name, namespace=a.namespace):
+            block(result, 'Tenant already exists: ' + a.name)
+    except RuntimeError as e:
+        block(result, 'Cannot rule out Tenant name collision: ' + str(e))
+
+    # Generated resources are created by the operator, not the user.
+    for resource, pattern in CHILDREN:
+        name = pattern.format(name=a.name)
+
+        # Do not fetch Secret objects, even with JSONPath projection.
+        if resource == 'secrets':
+            warning(result, 'UNVERIFIED child collision: ' + resource + '/' + name +
+                    ' (Secret lookup skipped to avoid retrieving Secret data)')
+            continue
+
+        # Users may create Tenants without permission to inspect generated resources.
+        try:
+            allowed = can(a, 'get', resource, a.namespace)
+        except RuntimeError as e:
+            block(result, 'Cannot verify permission for ' + resource + '/' + name + ': ' + str(e))
+            continue
+
+        if not allowed:
+            warning(result, 'UNVERIFIED child collision: ' + resource + '/' + name +
+                    ' (get permission denied; operator may report a conflict)')
+            continue
+
         try:
             if exists(a, resource, name, namespace=a.namespace):
                 block(result, 'Name already exists: ' + resource + '/' + name)
