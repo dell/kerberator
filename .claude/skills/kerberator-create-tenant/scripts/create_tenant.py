@@ -105,18 +105,41 @@ def main():
         return 1
     # Repeat preflight as close to the write as possible.
     pre = Path(__file__).with_name('precheck.py')
-    cmd = [sys.executable, str(pre), a.name, '-n', a.namespace, '--context', a.context]
+    cmd = [sys.executable, str(pre), a.name, '--realm', realm, '-n', a.namespace, '--context', a.context, '--json']
     if a.kubeconfig:
         cmd += ['--kubeconfig', a.kubeconfig]
+    
     rc, out, err = run(cmd)
-    print(out)
-    if rc != 0:
-        print('FAIL: precheck blocked creation:', err)
+
+    try:
+        report = json.loads(out)
+        status = report['status']
+    except (ValueError, KeyError, TypeError):
+        print('FAIL: could not read precheck result:', err or out)
         return 1
+
+    if rc != 0 or status == 'BLOCKED':
+        print('BLOCKED: precheck failed:', err or out)
+        return 1
+
+    if status == 'CHOICE_REQUIRED':
+        print('CHOICE_REQUIRED: resolve these choices before creation:')
+        print(json.dumps(report['choices'], indent=2))
+        return 1
+
+    if status not in ('READY', 'READY_WITH_WARNINGS'):
+        print('FAIL: unexpected precheck status:', status)
+        return 1
+
+    print('Precheck passed:', status)
+
+    for message in report.get('warnings', []):
+        print('WARN:', message)
+
     # Server-side dry run is intentionally not automatic: it is an API create-shaped request.
     rc, out, err = run(kubectl(a, 'create', '-f', '-'), stdin=data.decode('utf-8'))
     if rc:
-        print('FAIL: create was not confirmed successful:', err or out)
+        print('CREATE NOT CONFIRMED: Kubernetes may have created the Tenant:', err or out)
         print('NOTE: If timed out, inspect the target read-only; do not retry blindly.')
         return 1
     print('CREATE ACCEPTED:', out)

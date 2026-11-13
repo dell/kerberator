@@ -72,7 +72,7 @@ def inspect(a):
                 ready = ds.get('numberReady', 0)
                 check(isinstance(desired, int) and desired > 0 and ready == desired,
                       f'DaemonSet ready {ready}/{desired} (desired must be >0)')
-                if ds.get('observedGeneration', 0) < child.get('metadata', {}).get('generation', 0):
+                if (ds.get('observedGeneration') or 0) < (child.get('metadata', {}).get('generation') or 0):
                     check(False, 'DaemonSet controller has not observed current generation')
         except (RuntimeError, ValueError) as e:
             check(False, f'cannot verify {resource}/{name}: {e}')
@@ -89,8 +89,14 @@ def inspect(a):
                       for c in p.get('status', {}).get('conditions', [])) for p in members),
               'all observed DaemonSet pods have Ready=True')
     except (RuntimeError, ValueError) as e:
-        check(False, f'cannot verify daemon pod placement: {e}')
-    return {'status': 'VERIFIED' if not failures else 'NOT_READY_OR_INCOMPLETE',
+        observations.append({
+            'ok': None,
+            'detail': f'Daemon pod placement UNVERIFIED: {e}'
+        })
+
+    return {'status': ('NOT_READY_OR_INCOMPLETE' if failures else
+                       'PARTIALLY_VERIFIED' if any(c['ok'] is None for c in observations)
+                       else 'VERIFIED'),
             'context': a.context, 'namespace': a.namespace, 'tenant': a.name,
             'uid': uid, 'checks': observations, 'failures': failures,
             'note': 'KDC connectivity and successful ticket minting NOT verified; check expected node names manually.'}
