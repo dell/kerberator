@@ -84,7 +84,7 @@ End with a short report in two parts, and keep them separate:
 | `not found` | Wrong name or namespace | Run `kubectl krb list` and ask which Principal was meant. |
 | `Forbidden` | Account lacks permission | Stop; name the missing permission. Do not try other commands to get around it. |
 | Already in the requested state | Nothing to change | Report it and stop. |
-| After enable, nodes show `MintFailed` | The keytab may be stale or wrong, not an enable problem | Report the failing nodes and messages. Diagnosing key problems is DG-03, and replacing the keytab is OP-04. |
+| After enable, nodes show `MintFailed` | The keytab may be stale or wrong, not an enable problem | Report the failing nodes and messages. Diagnosing key problems is `kerberator-diagnose-auth-failure` (DG-02), and replacing the keytab is OP-04. |
 
 ## Never
 
@@ -100,5 +100,5 @@ End with a short report in two parts, and keep them separate:
 ## Out of scope
 
 Tenants (disable/enable), creating Principals (OP-03), replacing keytabs
-(OP-04), and diagnosing why a Principal is not Ready (DG-03, DG-06). Say so
+(OP-04), and diagnosing why a Principal is not Ready (`kerberator-diagnose-auth-failure` (DG-02)). Say so
 and stop when a request needs one of these.

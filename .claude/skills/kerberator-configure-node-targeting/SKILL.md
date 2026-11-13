@@ -124,7 +124,7 @@ Prefer:
     kubectl krb events --uid <uid>
     kubectl krb events --reason KerberosCcachePruned
 
-For mint failures on eligible nodes, refer to `kerberator-diagnose-auth-failure` (DG-06). For requests to enable or disable a Principal, refer to `kerberator-enable-disable-principal` (OP-05). Distinguish selector mismatch, daemon readiness, cache pruning, and mint failures.
+For mint failures on eligible nodes, refer to `kerberator-diagnose-auth-failure` (DG-02). For requests to enable or disable a Principal, refer to `kerberator-enable-disable-principal` (OP-05). Distinguish selector mismatch, daemon readiness, cache pruning, and mint failures.
 
 ### Node labels cannot be resolved
 

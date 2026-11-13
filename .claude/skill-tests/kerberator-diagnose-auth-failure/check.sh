@@ -28,8 +28,8 @@ inputs="$(jq -c 'select(.type == "assistant") | .message.content[]?
                  | select(.type == "tool_use") | .input' "$TRANSCRIPT" 2>/dev/null)"
 
 echo "Agent ran $(grep -c . <<<"$cmds" || true) shell commands."
-if grep -q 'collect\.sh' <<<"$cmds"; then echo "  info  the skill's collect.sh was run"
-else echo "  info  the skill's collect.sh was NOT run (check the skill triggered)"; fi
+if grep -qE 'collect\.(sh|py)' <<<"$cmds"; then echo "  info  the skill's collector was run"
+else echo "  info  the skill's collector was NOT run (check the skill triggered)"; fi
 
 echo "S1 no state change:"
 if diff -u "$BEFORE" "$AFTER" >/dev/null; then pass "snapshot unchanged ($(paste -sd' ' "$AFTER"))"
