@@ -23,6 +23,9 @@ import shutil
 import subprocess
 import sys
 
+# Shared timeout (seconds) for every subprocess call. Override with KRB_INSPECT_TIMEOUT.
+_TIMEOUT = int(os.environ.get("KRB_INSPECT_TIMEOUT", "30"))
+
 USAGE = """\
 inspect.py — read-only wrapper over `kubectl krb list|describe`.
 
@@ -71,19 +74,19 @@ i = 0
 while i < len(argv):
     a = argv[i]
     if a == "--context":
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
             sys.stderr.write(f"{a} needs a value\n"); sys.exit(64)
         ctx_flag = argv[i + 1]
         common += [a, argv[i + 1]]
         i += 2
     elif a == "--kubeconfig":
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
             sys.stderr.write(f"{a} needs a value\n"); sys.exit(64)
         kcfg = [a, argv[i + 1]]
         common += [a, argv[i + 1]]
         i += 2
     elif a in ("-n", "--namespace"):
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
             sys.stderr.write(f"{a} needs a value\n"); sys.exit(64)
         ns_flags += ["-n", argv[i + 1]]
         i += 2
@@ -92,7 +95,7 @@ while i < len(argv):
         ns_flags += ["-A"]
         i += 1
     elif a == "--tenant":
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
             sys.stderr.write(f"--tenant needs a value\n"); sys.exit(64)
         tenant_filter = argv[i + 1]
         i += 2
@@ -102,18 +105,32 @@ while i < len(argv):
         pos.append(a)
         i += 1
 
+# Reject unknown flags and unexpected positional arguments per subcommand.
+for _a in pos:
+    if _a.startswith("-"):
+        sys.stderr.write(f"unknown flag: {_a}\n"); sys.exit(64)
+if sub in ("list", "contexts") and pos:
+    sys.stderr.write(f"{sub}: unexpected argument(s): {' '.join(pos)}\n"); sys.exit(64)
+
 
 # Run `kubectl krb` with the same --context/--kubeconfig on every call, so
 # all lookups in one run hit the same cluster. Returns (stdout+stderr, rc).
 def krb(*args):
-    r = subprocess.run(["kubectl", "krb", *args, *common],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run(["kubectl", "krb", *args, *common],
+                           capture_output=True, text=True, timeout=_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        emit("error", f"kubectl krb {args[0]} timed out after {_TIMEOUT}s",
+             f"set KRB_INSPECT_TIMEOUT env var to increase (current: {_TIMEOUT}s)")
     return (r.stdout + r.stderr).rstrip("\n"), r.returncode
 
 
 def _run_config(*args):
-    r = subprocess.run(["kubectl", "config", *args, *kcfg],
-                       capture_output=True, text=True)
+    try:
+        r = subprocess.run(["kubectl", "config", *args, *kcfg],
+                           capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return f"kubectl config {args[0]} timed out", 1
     return (r.stdout + r.stderr).rstrip("\n"), r.returncode
 
 
@@ -121,8 +138,13 @@ def _run_config(*args):
 def ctx_name():
     if ctx_flag:
         return ctx_flag
-    r = subprocess.run(["kubectl", "config", "current-context", *kcfg],
-                       capture_output=True, text=True)
+    if not shutil.which("kubectl"):
+        return "<kubectl not found>"
+    try:
+        r = subprocess.run(["kubectl", "config", "current-context", *kcfg],
+                           capture_output=True, text=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        return "<context lookup timed out>"
     c = r.stdout.strip()
     return c or "<none set>"
 
@@ -149,12 +171,14 @@ def emit(status, raw, *hints):
 
 # Map raw kubectl error text to a status. Order matters: forbidden is checked
 # first so a permissions failure is never reported as "doesn't exist".
+# Patterns are anchored to known kubectl error formats to avoid matching
+# those words inside resource names (e.g. a Tenant literally named "forbidden").
 def classify_error(raw):
-    if re.search(r"forbidden|cannot (list|get) resource", raw, re.I):
+    if re.search(r"is forbidden:|cannot (list|get) resource", raw, re.I):
         return "forbidden"
     if re.search(r"no matches for kind|could not find the requested resource|doesn.t have a resource type", raw, re.I):
         return "crd-missing"
-    if re.search(r"not found", raw, re.I):
+    if re.search(r":\s*not found", raw, re.I):
         return "not-found"
     return "error"
 
@@ -190,6 +214,34 @@ if sub == "contexts":
         emit("ok", raw,
              f"contexts={n}: several clusters are configured; if the user did not name one, ask which to inspect (one, some, or all)")
 
+
+# Pin the context once so every subsequent cluster call targets the same cluster,
+# even if the kubeconfig's current-context changes between subprocess calls.
+if not ctx_flag:
+    try:
+        _r = subprocess.run(["kubectl", "config", "current-context", *kcfg],
+                             capture_output=True, text=True, timeout=10)
+        _pinned = _r.stdout.strip()
+        if _pinned:
+            ctx_flag = _pinned
+            common = [*common, "--context", _pinned]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # will fail naturally on the first cluster call
+
+# When --context was specified without -n, resolve that context's configured
+# namespace so the right namespace is used rather than the current context's.
+if ctx_flag and not ns_flags and not all_ns and sub in ("list", "describe"):
+    try:
+        _r = subprocess.run(
+            ["kubectl", "config", "view", *kcfg,
+             "-o", f"jsonpath={{.contexts[?(@.name==\"{ctx_flag}\")].context.namespace}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        _ctx_ns = _r.stdout.strip()
+        if _ctx_ns:
+            ns_flags = ["-n", _ctx_ns]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
 
 # Everything below calls the cluster through the plugin, so make sure it works.
 _v = subprocess.run(["kubectl", "krb", "version", *common],
@@ -309,9 +361,16 @@ if sub == "describe":
         elif by_uid:
             emit("not-found-by-name", raw,
                  f"'{name}' is a UID, not a CR name; Principal(s) with UID {name}: {','.join(by_uid)} (ns/CR-name; re-run: describe principal <CR-name> -n <ns>)")
-        hints = [f"no {kind} matching '{name}' in any namespace"]
         if kind == "Principal":
-            hints.append("Principal CR names are not UIDs; run 'list -A' to see real names and UIDs")
+            # kubectl krb list -A only shows Principals under discovered Tenants;
+            # a Principal whose TenantRef no longer resolves may be absent even
+            # when the list succeeds. Downgrade to unverified rather than asserting absence.
+            emit("not-found-unverified", raw,
+                 f"no Principal matching '{name}' found via kubectl krb list -A",
+                 "Principal CR names are not UIDs; run 'list -A' to see real names and UIDs",
+                 "orphaned Principals (broken TenantRef) may not appear in this listing; "
+                 "try `kubectl get principals.kerberator.dell.com -A` for an authoritative check")
+        hints = [f"no {kind} matching '{name}' in any namespace"]
         emit("not-found", raw, *hints)
     # forbidden / crd-missing / error: pass through unchanged.
     emit(status, raw)

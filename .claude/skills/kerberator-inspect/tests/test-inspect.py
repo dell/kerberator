@@ -18,6 +18,8 @@ SCRIPT = HERE.parent / "scripts" / "inspect.py"
 # Env knobs: STUB_CONTEXTS (context names), STUB_CURRENT (current context),
 # STUB_ALL_FORBIDDEN (make `list -A` fail with an RBAC error).
 STUB_BASH = r"""#!/usr/bin/env bash
+# Log every invocation for argument-capture tests.
+if [[ -n $STUB_LOG ]]; then echo "$*" >> "$STUB_LOG"; fi
 # `kubectl config ...`: local kubeconfig reads used by `contexts` and CONTEXT:.
 if [[ $1 == config ]]; then
   case "$2" in
@@ -25,7 +27,10 @@ if [[ $1 == config ]]; then
     get-contexts)
       if [[ " $* " == *" -o name "* ]]; then printf '%s\n' ${STUB_CONTEXTS:-dev}
       else echo "CURRENT   NAME   CLUSTER   AUTHINFO   NAMESPACE"; fi ;;
-    view) echo "dev  https://127.0.0.1:6443" ;;
+    view)
+      # jsonpath namespace query: return a context-specific namespace when asked.
+      if [[ "$*" == *"jsonpath"* && "$*" == *"prod"* ]]; then echo "payments"; exit 0; fi
+      echo "dev  https://127.0.0.1:6443" ;;
   esac
   exit 0
 fi
@@ -156,6 +161,42 @@ try:
     _, out = _run(["describe", "principal", "2001"])
     _assert(re.search(r"(?m)^HINT: .*UID 2001: demo-ns/uid-2001", out) is not None,
             "by-name hint names the CR")
+
+    # Issue 01: unknown flags and unexpected positional args are rejected (exit 64).
+    check("unknown flag typo --contex",   64, "",  "list", "--contex", "prod")
+    check("flag-as-value --context --kubeconfig", 64, "", "list", "--context", "--kubeconfig")
+    check("unexpected positional for list", 64, "", "list", "extra")
+    check("unexpected positional for contexts", 64, "", "contexts", "extra")
+
+    # Issue 02: missing kubectl must produce plugin-missing, not a crash.
+    _orig_path = os.environ.get("PATH", "")
+    _empty_bin = pathlib.Path(tempfile.mkdtemp()) / "bin"
+    _empty_bin.mkdir()
+    check("missing kubectl -> plugin-missing", 3, "STATUS: plugin-missing",
+          "list", env_extra={"PATH": str(_empty_bin)})
+
+    # Issue 04: a Principal not found anywhere is reported as not-found-unverified,
+    # not a confident not-found, because kubectl krb list -A may miss orphaned Principals.
+    check("principal not found anywhere -> unverified", 2, "STATUS: not-found-unverified",
+          "describe", "principal", "ghost")
+
+    # Issue 09: context flag is forwarded to cluster calls, not just the CONTEXT line.
+    import tempfile as _tf
+    _log = _tf.NamedTemporaryFile(delete=False, suffix=".log").name
+    _run(["list", "--context", "prod"], env_extra={"STUB_LOG": _log})
+    with open(_log) as _f:
+        _calls = _f.read()
+    _assert("--context prod" in _calls,
+            "--context prod forwarded to cluster calls")
+
+    # Issue 09 continued: namespace for the selected context is resolved and forwarded.
+    _log2 = _tf.NamedTemporaryFile(delete=False, suffix=".log").name
+    _run(["list", "--context", "prod"], env_extra={"STUB_LOG": _log2})
+    with open(_log2) as _f:
+        _calls2 = _f.read()
+    _assert("-n payments" in _calls2,
+            "namespace from --context prod resolved and forwarded")
+
 finally:
     shutil.rmtree(STUB)
 
