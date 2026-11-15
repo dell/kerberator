@@ -19,7 +19,7 @@ error, even when no daemon pod is running. Judge readiness from
 
 ## Hard rules
 
-1. **Read-only.** Only run `scripts/diagnose.py` (and `kerberator-inspect`'s `inspect.sh` for discovery). Never run `kubectl apply|patch|edit|delete|rollout|exec|scale`, or any mutating `kubectl krb` subcommand. Suggest fixes as commands for the user to run.
+1. **Read-only.** Only run `scripts/diagnose.py` (and `kerberator-inspect`'s `inspect.py` for discovery). Never run `kubectl apply|patch|edit|delete|rollout|exec|scale`, or any mutating `kubectl krb` subcommand. Suggest fixes as commands for the user to run.
 2. **No secret contents.** The script reads keytab Secrets as key names and sizes only. Never read, print, decode or ask for keytab bytes or Secret values.
 3. **Evidence, not inference.** Every claimed cause must quote a `FINDING` or a raw evidence line. Do not infer status from `spec` alone or from names.
 4. **Unknown is not healthy.** `FINDING: unknown …` means the evidence could not be read (RBAC). Say that area is unverified.
@@ -31,8 +31,8 @@ error, even when no daemon pod is running. Judge readiness from
 Run from this skill's base directory:
 
 ```
-scripts/diagnose.py contexts [--kubeconfig F]
-scripts/diagnose.py tenant <name> [-n NS] [--context C] [--kubeconfig F] [--logs | --no-logs] [--tail N]
+python3 scripts/diagnose.py contexts [--kubeconfig F]
+python3 scripts/diagnose.py tenant <name> [-n NS] [--context C] [--kubeconfig F] [--logs | --no-logs] [--tail N]
 ```
 
 Output:
@@ -84,7 +84,7 @@ Then:
 3. **Also found.** Other `cause`/`warn` findings, each marked as either a consequence of PRIMARY or independent.
 4. **Ruled out.** A compact list from `CHECKED-OK`, so the user can see what was eliminated (the "narrowing").
 5. **Unverified.** Every `unknown` finding, and what access would settle it.
-6. **Next step.** The fix from `references/causes.md`, as commands for the user to run, or a handoff: keytab KVNO/rotation goes to kerberator-rotate-keytab; per-Principal node detail goes to kerberator-inspect `describe principal`.
+6. **Next step.** The fix from `references/causes.md`, as commands for the user to run, or a handoff: keytab KVNO/rotation goes to `kerberator-rotate-keytab`; a Principal that is *failing* (not just being described) goes to `kerberator-diagnose-auth-failure`; plain Principal status or description goes to `kerberator-inspect describe principal`.
 
 When a few signals point to the same place, keep the report short. When nothing matched (`unexplained`), say no cause was isolated, show the strongest raw evidence, and suggest what to collect next.
 

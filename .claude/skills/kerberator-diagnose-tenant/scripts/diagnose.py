@@ -186,8 +186,6 @@ if sub != "tenant" or len(pos) != 1:
     die_usage()
 name = pos[0]
 
-if not shutil.which("jq"):
-    emit("plugin-missing", "jq is not on PATH", "install jq (brew install jq / apt install jq)")
 _v = subprocess.run(["kubectl", "krb", "version", *common],
                     capture_output=True, text=True)
 if _v.returncode != 0:

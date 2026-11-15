@@ -62,7 +62,7 @@ Each entry gives the signal, how to confirm it, common real causes, the fix (whi
   - *matches none of N node(s)*: no node carries the selector's labels (AND, exact match).
   - *N node(s) match … but none accept the daemon*: the labels are right, but every matching node is tainted or cordoned. The classic case is a selector that only the control-plane node matches (`node-role.kubernetes.io/control-plane:NoSchedule`).
 - **Common causes:** typo in `spec.daemon.nodeSelector`; nodes not yet labelled; missing `spec.daemon.tolerations` for tainted nodes.
-- **Fix:** label nodes (`kubectl label node <node> k=v`) or correct the selector. For tainted nodes, add a matching entry to `spec.daemon.tolerations` (e.g. `{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}`) with `kubectl krb edit tenant <name>`. Prefer a toleration over removing the node's taint: the taint protects that node from every other workload too.
+- **Fix:** label nodes (`kubectl label node <node> k=v`) or correct the selector. For tainted nodes, add a matching entry to `spec.daemon.tolerations` (e.g. `{key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}`); use `kerberator-update-tenant-principal` (OP-09) to patch the Tenant spec — `kubectl krb edit` opens `$EDITOR` and cannot be driven by an agent. Prefer a toleration over removing the node's taint: the taint protects that node from every other workload too.
 
 ### pod-create-failed
 - **Signal:** `FailedCreate` Event on the DaemonSet.
@@ -88,7 +88,7 @@ Each entry gives the signal, how to confirm it, common real causes, the fix (whi
 
 ### pod-crash-loop
 - **Signal:** `CrashLoopBackOff`, restart count, last terminated reason/exit code.
-- **Confirm:** the daemon pod's previous logs: `kubectl logs <pod> -n <ns> --previous` (the user runs this; the skill reads only operator logs).
+- **Confirm:** the daemon pod's previous logs (read automatically by the script via `--previous`; also operator logs).
 - **Common causes:** malformed `krb5.conf`, unreadable roster, permission denied on `hostCachePath`.
 
 ### pod-not-ready / pods-not-ready
@@ -116,7 +116,7 @@ Each entry gives the signal, how to confirm it, common real causes, the fix (whi
 - **Common causes by message:**
   - `Cannot contact any KDC` / `KDC unreachable` / timeout → node-to-KDC network, DNS, or `hostAliases`; not a Kerberator bug.
   - `Resource temporarily unavailable while getting initial credentials` → MIT kinit's wording for "no KDC answered" (EAGAIN). Check the KDC named in `krb5.conf` is up; an in-cluster KDC that was restarting (e.g. after a node or Docker restart) gives this briefly. The daemon does **not** retry until its next renew tick (below).
-  - `Password incorrect while getting initial credentials` / `Preauthentication failed` / `Key version … not found` → the keytab no longer matches the KDC's key (the key was changed or re-randomized on the KDC, or the KDC's database was recreated) → `kerberator-rotate-keytab`. MIT kinit says *Password incorrect* even for keytabs; it does not mean a human password. (Seen on kind: `kadmin cpw -randkey` on the KDC, or recreating the demo KDC pod, whose database is on an `emptyDir`.)
+  - `Password incorrect while getting initial credentials` / `Preauthentication failed` / `Key version … not found` → the keytab may no longer match the KDC's key, but the same error also appears with the wrong principal's keytab or when the KDC re-keyed without bumping the KVNO. Use `kerberator-diagnose-auth-failure` to confirm the root cause before rotating; then `kerberator-rotate-keytab` if rotation is indicated. MIT kinit says *Password incorrect* even for keytabs; it does not mean a human password. (Seen on kind: `kadmin cpw -randkey` on the KDC, or recreating the demo KDC pod, whose database is on an `emptyDir`.)
   - `Client not found in Kerberos database` → principal name/realm wrong in `spec.principal`.
   - `Cannot find KDC for realm` → `krb5Conf` missing the realm (see below).
 - **A failed mint is not retried early.** The daemon mints once at start, then only every renew interval (`renewMinutes`, default 30). If the cause was transient (KDC still starting), the failure stays the current state until the next interval even though the KDC is now fine. Check: is the KDC healthy *now*, and is the failure older than the KDC's start? If so, say it will clear at the next interval, or that restarting the daemon pods (`kubectl delete pod -n <ns> -l app.kubernetes.io/name=kerberator-daemon,app.kubernetes.io/instance=<tenant>`, user runs; the DaemonSet recreates them) retries immediately. Do **not** suggest `kubectl rollout restart`: the operator owns the DaemonSet's pod template and reverts the restart annotation on its next reconcile, so usually only one pod is replaced. The script flags this as `mint-failure-stale`. (Seen on kind: daemon started 5s before the in-cluster KDC was serving.)
@@ -154,16 +154,17 @@ Each entry gives the signal, how to confirm it, common real causes, the fix (whi
 - **Signal:** a Principal reports `Ready=False NoEligibleNodes`: its own `spec.nodeSelector` matches no node, so it is minted **nowhere**, even though the Tenant's daemons are fine.
 - **Meaning:** a configuration mistake, not a daemon failure. Usual causes: a typo in the key or value (`security_zone` vs `security-zone`), a label that was never applied or has since been removed, or a selector that needs labels on two different nodes (selectors AND their terms).
 - **Confirm:** `kubectl krb node-labels` shows the labels that exist; compare them with the selector in the finding.
-- **Fix (user runs):** label the intended nodes, or correct the selector with `kubectl krb edit principal <name>`.
+- **Fix (user runs):** label the intended nodes, or correct the selector using `kerberator-configure-node-targeting` (OP-06) — `kubectl krb edit` opens `$EDITOR` and cannot be driven by an agent.
 
 ### principal-status-stale (info)
+<!-- Remove this rule after https://github.com/dell/kerberator/pull/22 merges into main — it describes a fixed bug. -->
 - **Signal:** a Principal reports `Ready=False SomeDaemonsNotReady` with empty per-node reasons, but every daemon pod is Ready and the newest Event on each of those nodes is a successful mint, more than 5 minutes old. `spec.daemon.renewMinutes` and `spec.eventStalenessThreshold` are both unset.
 - **Meaning:** a known operator issue, not a fault. With `renewMinutes` unset, the operator treats a mint Event as current for only 5 minutes, but the daemon renews every 30 minutes, so the status goes "not ready" between renewals while the tickets are fine. See [dell/kerberator#22](https://github.com/dell/kerberator/pull/22).
 - **Report:** say the Principal is minting and the status is stale. Do not report it as broken.
 - **Fix (user runs):** set `spec.daemon.renewMinutes: 30` (or `eventStalenessThreshold: 1h`) on the Tenant. To refresh the status now, delete the daemon pods (`kubectl delete pod -n <ns> -l app.kubernetes.io/name=kerberator-daemon,app.kubernetes.io/instance=<tenant>`).
 
 ### principal-not-ready (warn)
-- A child Principal reports `Ready=False`/`Unknown` with a reason other than `Disabled`/`TenantDisabled`. Use `kerberator-inspect describe principal` for per-node detail.
+- A child Principal reports `Ready=False`/`Unknown` with a reason other than `Disabled`/`TenantDisabled`. Use `kerberator-diagnose-auth-failure` for a Principal that is actively failing; use `kerberator-inspect describe principal` for plain status or description.
 
 ### unknown \<area\>
 - The caller could not read that evidence (RBAC). The state of that area is **unknown, not healthy**; name the denied resource.
