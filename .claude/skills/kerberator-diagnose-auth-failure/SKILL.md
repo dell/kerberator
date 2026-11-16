@@ -92,3 +92,9 @@ Lead with one line, then these parts, kept separate:
 
 Fixing the failure, anything on the KDC itself, and node-level debugging
 (clocks, networking) beyond reporting the evidence. Say so and stop.
+
+## Shared event interpretation reference
+
+When interpreting Kerberator Events, consult the shared
+[DG-07 event interpretation reference](../kerberator-interpret-events/references/event-interpretation.md).
+Do not duplicate event semantics or treat an event reason alone as proof of root cause.
