@@ -29,18 +29,22 @@ def main():
     # Plugin is a cluster-scoped operation; not a general node evacuation.
     if not os.environ.get("OP07_SKIP_PLUGIN_CHECK"):
         run([*base, "krb", "drain-node", "--help"], timeout=15)
-    perms = check_access(base, state["daemons"])
+    perms = check_access(base, state["daemons"], a.mode)
     issues = []
     if state["node"]["cordoned"] == (a.mode == "drain"):
         issues.append(f"Node already {'cordoned' if a.mode=='drain' else 'uncordoned'}; no state transition is needed")
-    if state["node"]["ready"] is not True and a.mode == "uncordon":
-        issues.append("Node is not Ready; do not return it to scheduling service")
+    if a.mode == "uncordon" and state["node"]["ready"] is not True:
+        msg = (
+            "Node Ready status is unknown"
+            if state["node"]["ready"] is None
+            else "Node is not Ready; do not return it to scheduling service"
+        )
+        issues.append(msg)
+
     if not all(x["allowed"] for x in perms):
-        issues.append("Required read/update/delete authorization could not be confirmed")
+        issues.append("Required RBAC permissions could not be confirmed")
     if a.mode == "drain" and any(not d["daemonset_owner"] for d in state["daemons"]):
         issues.append("Unowned/non-DaemonSet Kerberator-labeled pod detected; review before deletion")
-    if a.mode == "uncordon" and state["node"]["ready"] is None:
-        issues.append("Node Ready status is unknown")
     plan = {"version":1,"mode":a.mode,"context":context,"kubeconfig":os.path.abspath(a.kubeconfig) if a.kubeconfig else None,
             "node":node,"baseline":state,"permissions":perms,"issues":issues,
             "effects":(["Cordons the node", "Deletes every Kerberator-labeled daemon pod on that node across namespaces", "Does NOT evict ordinary workloads", "DaemonSet pods can immediately recreate despite cordon"] if a.mode=="drain" else ["Uncordons the node only", "Does NOT restart daemons or relocate workloads"])}
@@ -49,8 +53,12 @@ def main():
     # status is included in the signed digest: recompute after finalizing.
     plan["plan_id"] = checksum({k:v for k,v in plan.items() if k!="plan_id"})
     if a.out:
-        with open(a.out,"w",encoding="utf-8") as f:
-            json.dump(plan,f,indent=2); f.write("\n")
+        try:
+            with open(a.out, "w", encoding="utf-8") as f:
+                json.dump(plan, f, indent=2)
+                f.write("\n")
+        except OSError as e:
+            raise Stop(f"Cannot write plan to {a.out}: {e}")
     print(json.dumps(plan,indent=2))
     return 1 if issues else 0
 

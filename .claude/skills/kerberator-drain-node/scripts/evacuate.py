@@ -86,8 +86,15 @@ def make_plan(a):
                   'Does NOT invoke kubectl krb drain-node',
                   'Workload rescheduling, storage, capacity, Kerberos credentials require separate review']}
     p['plan_id']=checksum(p)
+    
     if a.out:
-        with open(a.out,'w',encoding='utf-8') as f:json.dump(p,f,indent=2);f.write('\n')
+        try:
+            with open(a.out, 'w', encoding='utf-8') as f:
+                json.dump(p, f, indent=2)
+                f.write('\n')
+        except OSError as e:
+            raise Stop(f'Cannot write plan to {a.out}: {e}')
+
     print(json.dumps(p,indent=2))
     return 1 if blockers else 0
 

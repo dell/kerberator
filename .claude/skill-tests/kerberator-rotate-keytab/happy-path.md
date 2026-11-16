@@ -30,7 +30,9 @@ Example test values:
 
 Type this exact message into a new agent chat:
 
-> Rotate the keytab for Principal `uid-2001` in namespace `kerberator-project` using `./svc-2001-new.keytab`. Verify that the rotation succeeds and that all nodes recover.
+> Rotate the keytab for Principal `uid-2001` in namespace `kerberator-project`
+using `/home/goyal/kerberator/svc-2001-v2.keytab`.
+Verify that the rotation succeeds and that all nodes recover.
 
 ## Expected behavior
 
