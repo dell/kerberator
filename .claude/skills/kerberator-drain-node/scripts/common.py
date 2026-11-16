@@ -109,9 +109,18 @@ def snapshot(base, node):
     return {"node": nodeinfo, "daemons": sorted(daemons, key=lambda x:(x["namespace"],x["name"])), "other_pods": sorted(other,key=lambda x:(x["namespace"],x["name"]))}
 
 
-def check_access(base, daemons):
-    checks = [("get", "nodes", None), ("update", "nodes", None), ("list", "pods", "all")]
-    checks += [("delete", "pods", ns) for ns in sorted({p["namespace"] for p in daemons})]
+def check_access(base, daemons, mode):
+    checks = [
+        ("get", "nodes", None),
+        ("update", "nodes", None),
+        ("list", "pods", "all"),
+    ]
+
+    if mode == "drain":
+        checks += [
+            ("delete", "pods", ns)
+            for ns in sorted({p["namespace"] for p in daemons})
+        ]
     results = []
     for verb, resource, ns in checks:
         cmd = [*base, "auth", "can-i", verb, resource]
