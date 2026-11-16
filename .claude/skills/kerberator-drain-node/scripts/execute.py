@@ -22,8 +22,13 @@ def main():
     if state["node"]["uid"]!=old["node"]["uid"] or state["node"]["cordoned"]!=old["node"]["cordoned"]:
         raise Stop("Node identity or scheduling state has changed; rerun preflight")
     # For drain the CLI deletes all matching Kerberator daemon pods; avoid races.
-    if plan["mode"]=="drain" and state["daemons"]!=old["daemons"]:
+    if plan["mode"] == "drain" and (
+        {d["uid"] for d in state["daemons"]}
+        != {d["uid"] for d in old["daemons"]}
+    ):
         raise Stop("Daemon pod roster changed; rerun preflight and review affected pods")
+
+
     if plan["mode"]=="uncordon" and state["node"]["ready"] is not True:
         raise Stop("Node is not Ready; uncordon is blocked")
     cmd=[*base,"krb","drain-node",plan["node"]]
