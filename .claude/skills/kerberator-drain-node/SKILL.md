@@ -1,86 +1,137 @@
 ---
 name: kerberator-drain-node
-description: Drain a Kubernetes node used by Kerberator for maintenance, verify destination credential coverage before eviction, register a missing Principal only when needed, and verify relocated workloads. Use for node evacuation or maintenance with Kerberos-dependent pods; not for credential revocation or merely restarting a daemon.
+description: Safely guide the documented `kubectl krb drain-node <node>` workflow, inspect the selected cluster and affected Kerberator daemons, execute an explicitly authorized drain or `--uncordon`, and verify the observed node state. Use for OP-07 maintenance of a Kerberator node. Also supports a separate, explicitly authorized ordinary-workload evacuation with `kubectl drain --ignore-daemonsets`.
 ---
 
-# Kerberator node drain
+# OP-07 — Drain a node / return a node to service
 
-Evacuate ordinary workloads while preserving their Kerberos access. Use installed `kubectl` and `kubectl krb`; this skill does not require a source checkout. Check installed command help and cluster API schema when fields or flags differ. Examples below use resolved shell variables, never literal placeholders.
+Use **only** the scripts packaged with this skill and the installed `kubectl`/`kubectl-krb` plugin. No repository source checkout is needed. Python 3 standard library only.
 
-## Essential behavior
+## Contract you must understand before doing anything
 
-- A Principal maps a workload UID to a Kerberos identity in a Tenant. Moving a pod does **not** require a new Principal per node. Eligible daemons independently mint the existing identity's cache; caches are not migrated.
-- Credential coverage is the intersection of Tenant daemon placement and Principal `spec.nodeSelector`. Neither schedules workload pods. Workload scheduling must keep every possible destination inside that coverage.
-- Use `kubectl drain --ignore-daemonsets`. The current `kubectl krb drain-node` implementation only cordons and deletes matching daemon pods across namespaces; DaemonSets can recreate them on cordoned nodes. It does not evacuate workloads.
-- Keep daemons running during eviction. Their host caches (normally `/tmp/krb5cc_<uid>`) survive pod deletion; stopping a daemon neither purges nor revokes tickets.
+The current `kubectl krb drain-node NODE` command **cordons NODE and deletes all pods labeled `app.kubernetes.io/name=kerberator-daemon` on that node**, across namespaces. It **does not evict other workloads**. The `--uncordon` form **only uncordons the node**; it does not recreate pods or validate Kerberos.
 
-## 1. Establish target and evacuation scope
+**Critical caveat:** Kubernetes DaemonSet pods generally tolerate unschedulable/cordoned nodes. The DaemonSet controller may immediately recreate deleted daemon pods *while the node is still cordoned*. Consequently, **do not promise that the daemon is stopped or that ticket minting is quiesced**. This workflow verifies the observed outcome, not permanent daemon absence. If the user needs workload evacuation, use the **optional `scripts/evacuate.py` workflow below**, only after separately assessing and authorizing that disruption. Never silently substitute it for `kubectl krb drain-node`. If they need guaranteed daemon quiescence, stop and explain that an additional authorized placement change or corrected CLI semantics are required.
 
-Resolve the intended kubeconfig/context and exact node from the request and session. Ask only for unresolved choices; do not silently select among ambiguous clusters. Pass explicit `--context "$CTX"` to every cluster command, the selected `--kubeconfig` when applicable, and `-n "$NS"` for namespaced operations. `NS` is the Tenant/Principal namespace, which can differ from workload namespaces.
+## Interaction: discovery first, minimal questions
 
-Inspect node readiness, labels, taints and cordon state; all pods on the node; owning controllers; PDBs; storage; and available destination capacity:
+Discover kubeconfig, available contexts, nodes, ready state, daemon pods, and permissions by running `scripts/preflight.py`. **Do not ask** the user for namespace, daemon Pod name, node labels, Kerberos realm, keytabs, or kubectl commands: these are either discoverable or unnecessary for this operation. No credentials or Secret data are needed.
 
-```bash
-kubectl --context "$CTX" get node "$NODE" -o yaml
-kubectl --context "$CTX" get pods -A --field-selector "spec.nodeName=$NODE" -o wide
-kubectl --context "$CTX" get nodes -o wide --show-labels
-kubectl --context "$CTX" get pdb -A
-kubectl --context "$CTX" get tenants.kerberator.dell.com,principals.kerberator.dell.com -A -o yaml
-```
+Ask a question only if (1) several contexts exist and the user did not name one, (2) the target node is unspecified/ambiguous, (3) the user has not authorized the proposed mutation, or (4) the request is actually ambiguous between Kerberator-daemon drain and Kubernetes workload evacuation. Cluster-read failures are **not** a questionnaire: report the RBAC/error cause and required administrator action.
 
-Read affected pod/controller specs to determine effective workload UIDs, identities, node selectors/affinity, tolerations, topology constraints and volumes. Do not infer an identity solely from a pod name or assume an unspecified `runAsUser` means a particular UID. Identify unmanaged pods, `emptyDir`/host-local data, local-volume affinity, and static/mirror or DaemonSet pods that will remain. Account for operator/KDC pods if hosted here. Missing access or uncertain identity/placement is a blocker to claiming a safe evacuation.
+Never silently select a context when multiple exist. Prefer a context or kubeconfig explicitly named by the user. Pin both in every operation. Never use a guessed namespace or the implicit `default` for discovering daemon pods.
 
-## 2. Prepare credentials BEFORE eviction
+## A. Discover and assess (read-only)
 
-Map each affected Kerberos identity to its existing Principal and Tenant. Confirm both are enabled, the keytab reference resolves, and eligible destination nodes have running Tenant daemons and the required consumer setup (for example NFS mounts and host `rpc.gssd`, or an application cache mount).
-
-- **Existing Principal:** reuse it. If destination coverage is missing, prepare the smallest intended change to Principal placement, Tenant daemon placement, or workload controller scheduling. Explain that credential expansion exposes the identity on more nodes, selector narrowing can prune source caches, and controller template edits can roll pods. Preserve source coverage until workloads leave. Do not blindly clear selectors, relabel nodes, edit operator-owned children, or create duplicate UID identities sharing a host cache path.
-- **Missing Principal:** collect the existing KDC identity, positive workload UID, Tenant, trusted keytab path and intended node scope. Kerberator registration creates a Kubernetes Secret and Principal; it does not create a KDC account or issue a keytab. If these inputs are unavailable, stop before draining.
-
-For an authorized new registration, inspect for identity/UID conflicts and existing `uid-<UID>` / `uid-<UID>-keytab` objects first, then use:
+First, if a node is not known, list the candidate nodes:
 
 ```bash
-kubectl krb --context "$CTX" -n "$NS" add-principal "$TENANT" "$WORKLOAD_UID" \
-  --principal "$KERBEROS_PRINCIPAL" --keytab-file "$KEYTAB_PATH" \
-  --node-selector "$PLACEMENT_KEY=$PLACEMENT_VALUE"
+python3 scripts/preflight.py --mode drain [--context CONTEXT] [--kubeconfig PATH]
 ```
 
-Repeat `--node-selector` for ANDed labels; omit it only when all Tenant daemon nodes are the intended scope. Never print keytab contents or Secret data. Do not use this command's `--dry-run` for a public preview: it prints the keytab as base64. Preview names, identity, UID and placement without credentials. On failure, inspect partial creation before retrying; do not overwrite or delete pre-existing objects.
-
-Show concrete changes and their effects before executing them. Use authorization already supplied for the maintenance task; ask only for missing authorization, such as an unrequested expansion of credential access or workload scheduling changes.
-
-Verify every required Principal with:
+Then run the full preflight with one exact node:
 
 ```bash
-kubectl krb --context "$CTX" -n "$NS" describe principal "$PRINCIPAL_CR"
+python3 scripts/preflight.py --mode drain --node NODE --context CONTEXT --out /tmp/op07-drain-plan.json
 ```
 
-Require positive eligible-node coverage and successful `Minted` observations on **each possible destination**, with ready daemons and observations applicable to the current configuration. Inspect full Principal status/Events if CLI output is truncated. Pod readiness alone checks cache presence/nonempty size, not ticket validity; keytab KVNO alone does not prove minting. If evidence is absent or stale relative to renewal/configuration, wait within a stated bounded interval or investigate read-only; do not assume success or restart daemons merely to generate evidence. Stop before eviction if coverage cannot be established.
-
-## 3. Drain and observe
-
-State the node, affected workloads, credential evidence, expected remaining pods and chosen timeout. Once authorized, execute one node at a time (example timeout: 10 minutes):
+For return to service, use **a fresh plan**, not the old drain plan:
 
 ```bash
-kubectl --context "$CTX" drain "$NODE" --ignore-daemonsets --timeout=10m
+python3 scripts/preflight.py --mode uncordon --node NODE --context CONTEXT --out /tmp/op07-uncordon-plan.json
 ```
 
-Keep normal eviction and termination behavior. Do not automatically add `--force`, `--disable-eviction`, `--delete-emptydir-data`, or zero grace periods, change PDBs, or delete blocking pods. Report the concrete blocker and obtain any additional authorization for data loss or disruption-policy changes.
+Omit `--context` only if preflight confirms exactly one configured context; omit `--kubeconfig` if the ordinary kubeconfig is intended. The scripts display JSON containing the actual selected context, node readiness/cordon status, Kerberator daemon pods, other pods remaining on that node, per-namespace RBAC checks, the proposed effects, and any blockers. The `--out` file is local only and contains no keytab or Secret data.
 
-On timeout/failure, inspect remaining pods and events. A failed drain may already have cordoned the node and evicted some pods: report partial completion, leave its state explicit, and do not blindly retry or uncordon. A successful drain does not prove replacement pods are healthy.
+**Interpret statuses:** `READY` means the verified preconditions permit proposing the command, *not* that the operation has been authorized or that a daemon will stay absent; `CHOICE_REQUIRED` means the target is missing; `BLOCKED` means do not proceed. Report `Forbidden` distinctly from `NotFound` or missing `kubectl`/plugin. Do not bypass `BLOCKED` or install tools, change RBAC, change Pod Security policies, or edit the cluster to make it pass.
 
-## 4. Verify relocation and hand off maintenance
+If preflight reveals other running pods, explicitly state they will **not** be evacuated. If the request is for maintenance requiring ordinary workload evacuation, follow the optional guarded evacuation workflow below. Do not imply the plugin command alone empties the node.
 
-Track replacement pods through their workload controllers, not old pod names. Confirm desired replicas/Jobs recover as appropriate, actual destination nodes are covered, Principal mint evidence remains healthy, and workload readiness plus an existing safe Kerberos-dependent health check succeeds. Do not invent a write test against production data. If application authentication was not tested, state that limitation.
+## B. Show one concise proposal and obtain approval
 
-Report the source's cordon state, remaining DaemonSet/static pods, relocated workloads and destinations, credential changes/evidence, and unresolved blockers. Keep the node cordoned for maintenance; do not reboot, delete it, or uncordon merely because drain finished.
+State:
 
-When maintenance is complete and returning the node is requested/authorized, verify node health, Tenant daemons and applicable Principal minting, then run `kubectl --context "$CTX" uncordon "$NODE"`. Uncordon allows scheduling; it does not automatically move workloads back. Restore any temporary configuration only after checking its effect on current workloads and credential coverage.
+- Context and exact node; current Ready and cordon state.
+- The affected Kerberator daemon pod names, namespaces, and count (the plugin deletes all matching daemons on that node, not just a selected Tenant).
+- Other resident workloads that will remain.
+- Effects and risks, especially possible immediate DaemonSet recreation, temporary interruption of ticket minting, and existing tickets not being revoked or purged.
+- Whether this is **drain** or **return to service**.
 
-## Sources
+Ask once: **“Run `kubectl krb drain-node NODE` on context CONTEXT?”** or **“Return NODE to service with `kubectl krb drain-node NODE --uncordon`?”** An explicit earlier user instruction to perform this exact action on this exact target can count as approval; do not ask twice. Approval for draining does not authorize uncordoning later unless the user already authorized that as part of an unambiguous maintenance workflow.
 
-- [Kubernetes drain behavior and flags](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_drain/)
-- [Safe node maintenance](https://kubernetes.io/docs/tasks/administer-cluster/safely-drain-node/)
-- [Workload node placement](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/)
+No execution if the user only asked for an assessment, or if any blocker remains. Do not auto-retry a write.
 
-Kerberator-specific behavior was checked against its drain CLI, Principal registration, DaemonSet builder, daemon mint loop and readiness implementation. Recheck installed behavior if a later release changes these contracts.
+## C. Execute the single approved operation
+
+After approval, run the bundled executor against the **matching, fresh, READY plan**:
+
+```bash
+python3 scripts/execute.py --plan /tmp/op07-drain-plan.json --approve NODE
+```
+
+For return to service:
+
+```bash
+python3 scripts/execute.py --plan /tmp/op07-uncordon-plan.json --approve NODE
+```
+
+The executor rechecks node UID and scheduling state and, for draining, the daemon pod roster before mutation. It then executes exactly one of these installed plugin commands using the pinned context:
+
+```bash
+kubectl --context CONTEXT krb drain-node NODE
+kubectl --context CONTEXT krb drain-node NODE --uncordon
+```
+
+For `PARTIAL_OR_FAILED`, **do not repeat the command blindly**. The plugin updates the node before attempting pod deletion, so it may have made partial changes. Verify and explain observed state, then request new authorization for any recovery action.
+
+## D. Verify real cluster state (read-only)
+
+```bash
+python3 scripts/verify.py --plan /tmp/op07-drain-plan.json
+# or
+python3 scripts/verify.py --plan /tmp/op07-uncordon-plan.json
+```
+
+Report actual `spec.unschedulable`, Node Ready, daemon pod identities before/after, replacements appearing after deletion, and any ordinary pods still present. A result of `STATE_VERIFIED_WITH_WARNINGS` is **not** proof of daemon quiescence. A basic successful uncordon is also **not** proof that workloads are healthy or Kerberos minting has recovered.
+
+When the user asks for Kerberos readiness confirmation after uncordon, read relevant Tenant/Principal status and daemon readiness; don't claim tickets are valid from Pod Ready alone. If that evidence is not available, report the verification limit.
+
+**Never automatically uncordon after a drain.** The node may intentionally remain cordoned for maintenance. Only run the return-to-service phase once maintenance is complete and the user wants the node returned.
+
+## E. Optional: evacuate ordinary workloads for maintenance (separate operation)
+
+**Use only if the user specifically wants workloads moved off the node.** This is a different operation from `kubectl krb drain-node`; its primary command is standard `kubectl drain --ignore-daemonsets`, which evicts eligible ordinary workload pods and keeps DaemonSet/mirror pods. Do not invoke both commands by default or assume one substitutes for the other. If users need both, explain the separate effects, plan each, and obtain approval covering each operation. **Prefer normal workload evacuation before deliberately disturbing Kerberator daemons**, with credential coverage on destination nodes already verified.
+
+The additional bundled `scripts/evacuate.py` uses the same discovery-first approach and accepts `plan`, `execute`, and `verify`. It needs no knowledge of Kerberos realms or Secret contents.
+
+1. **Discover (read-only):** `python3 scripts/evacuate.py plan --node NODE --context CONTEXT --out /tmp/op07-evacuate-plan.json`. Without `--node` it lists nodes. It inspects all pods on the node (across namespaces), owner controllers, `emptyDir` volumes, PodDisruptionBudgets, and RBAC. It returns `BLOCKED` instead of enabling dangerous `kubectl drain` flags. It does not itself prove that other nodes have enough CPU, capacity, storage access, or valid Kerberos credential coverage.
+2. **Analyze impacts before approval:** Identify all affected workloads, controllers, destination-node eligibility, PDB limits, storage (`hostPath`, local PVs, `emptyDir`), readiness requirements, and whether applications require a Kerberos Principal. Check required Principals and Tenant daemon placement on *possible destination nodes* using status/cluster evidence. If capacity, identity, or data safety cannot be established, stop and report the specific gap instead of pretending the plan is safe. Do not create Principals, modify selectors, or widen credential access automatically. Do not treat `READY` from the script as a production-safety guarantee.
+3. **Request explicit disruptive-action approval** for the exact context, node, and ordinary workload eviction; prior permission to run `kubectl krb drain-node` alone does not authorize this. State that workloads can be evicted and potentially suffer downtime. Never automatically enable `--force`, `--delete-emptydir-data`, `--disable-eviction`, `--grace-period=0` or PDB modifications.
+4. **Execute once:** `python3 scripts/evacuate.py execute --plan /tmp/op07-evacuate-plan.json --approve NODE`. It rechecks the node UID, cordon state, and pod inventory, then runs `kubectl drain NODE --ignore-daemonsets --timeout=600s` using the pinned context/kubeconfig. On failure, assume partial eviction may have occurred: **do not** blindly retry or uncordon.
+5. **Verify:** `python3 scripts/evacuate.py verify --plan /tmp/op07-evacuate-plan.json`. Require node cordoned and zero ordinary running/pending pods left; DaemonSet/static/mirror pods are expected to remain. Additionally inspect the *replacement* workload pods and controllers for readiness, actual destinations, and application-specific Kerberos access if relevant. The script does not claim those secondary checks pass automatically.
+6. **Return to service:** After maintenance and separate approval, use **the normal OP-07 `preflight.py --mode uncordon` → `execute.py` → `verify.py`** sequence. This runs `kubectl krb drain-node NODE --uncordon`, not a second drain. Verify node readiness before return. Uncordon makes scheduling possible; it does not automatically move workload replicas back.
+
+If no managed pod can be safely evicted because of a PDB, local storage, scheduling constraints, missing credentials, or insufficient permissions, the right result is **BLOCKED**, not a forced drain. The agent should disclose these blockers and hand off to a cluster administrator or appropriate diagnostic skill as relevant.
+
+## Troubleshooting and hand-offs
+
+| Observation | Agent behavior |
+|---|---|
+| `kubectl` or `kubectl krb` missing | Report the missing installed dependency; refer to `kubectl-krb` installation documentation, no automatic install |
+| Unknown/multiple contexts | Show discovered contexts and ask one targeted selection question |
+| Node or cluster read forbidden | Identify missing RBAC; do not assume absence or ask for secrets |
+| Cannot `update nodes` / `delete pods` | Stop; note that node updates and pod deletion require elevated permissions |
+| Daemon pods reappear on cordoned node | Explain DaemonSet scheduling tolerations; do not repeatedly delete pods or claim quiescence |
+| User wants ordinary workloads evacuated | Run `scripts/evacuate.py plan` and follow its separate approval/execution/verification flow; DaemonSet and mirror pods remain |
+| Daemon/Principal not ready after return | Hand off to `kerberator-inspect` for CR status; `kerberator-diagnose-auth-failure` for mint/auth failures; `kerberator-configure-node-targeting` for selector/eligible-node problems |
+| Node Ready=False or daemon pods are unhealthy | Do not uncordon automatically; provide observed Kubernetes node/pod conditions for admin investigation |
+| User requests permanent daemon exclusion or credential revocation | Out of scope; never change DaemonSet/Principal selectors or disable a Principal as an implicit drain side effect |
+
+## Hard rules
+
+- Only one target node per invocation; never mutate the control plane or other nodes without their own explicit review/approval.
+- No automatic `kubectl drain` **unless the separate evacuation workflow was requested and authorized**, `delete node`, selector patching, disabling Tenants/Principals, forced eviction, or secret/keytab reads.
+- Do not print authentication tokens, kubeconfig contents, keytab bytes, Secret `.data`, or ticket-cache contents.
+- Do not commit or push to GitHub.
+- Distinguish **node cordoned**, **daemon deletion attempted**, **daemon absent now**, **ordinary pods evacuated**, **Kerberos healthy**, and **node returned to service**. These are different claims.
+- Test in a disposable Kubernetes cluster before using the mutation path on a shared/production environment.
