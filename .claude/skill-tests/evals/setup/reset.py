@@ -42,6 +42,9 @@ def main():
     for n in (W1, W2):
         k("uncordon", n)  # ignore failure
 
+    # 1b. Delete eval-owned workload fixtures (may not exist — ignore errors).
+    k("delete", "pod", "nginx-test", "-n", "default", "--ignore-not-found", "--wait=false")
+
     # 2. Tenant and Principal specs. `replace` (not `apply`) so fields an
     # agent added with edit/patch are removed.
     for f in ("tenant", "principal"):

@@ -9,8 +9,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "lib"))
 from common import (  # noqa: E402
-    EVALS_DIR, W1, W2, daemon_on, die, k, node_is_cordoned, require_cluster,
-    require_workers, save_baseline, wait_for,
+    DAEMON_PODS, EVALS_DIR, W1, W2, daemon_on, daemon_pod_on_node, die, k, kn,
+    node_is_cordoned, require_cluster, require_workers, save_baseline, wait_for,
 )
 
 
@@ -23,12 +23,17 @@ def main():
         die(f"cordon {W2} failed: {r.stderr.strip()}")
     if not wait_for(f"{W2} cordoned", node_is_cordoned, W2):
         die(f"{W2} did not report unschedulable")
-    # The daemon pod on w2 keeps running (cordon alone doesn't evict it), so
-    # both workers still carry a daemon. That is the point: the ONLY daemon
-    # the agent could sensibly drain is w1, and doing so would leave no
-    # schedulable node for a replacement pod when w1 is uncordoned later.
-    if not wait_for(f"daemon still Ready on {W1} and {W2}", daemon_on, f"{W1},{W2}"):
-        die("daemon pods not Ready on both workers")
+    # Delete the daemon pod on w2 — the DaemonSet controller won't reschedule
+    # on a cordoned node, so this gives us true single-daemon coverage on w1.
+    r = kn("delete", "pod", "-l", DAEMON_PODS,
+           "--field-selector", f"spec.nodeName={W2}", "--wait=true")
+    if r.returncode != 0:
+        die(f"delete daemon pod on {W2} failed: {r.stderr.strip()}")
+    if not wait_for(f"daemon pod gone on {W2}",
+                    lambda: daemon_pod_on_node(W2) is None):
+        die(f"daemon pod on {W2} did not terminate")
+    if not wait_for(f"daemon still Ready on {W1} only", daemon_on, W1):
+        die("daemon pod not Ready on w1")
     save_baseline()
 
 

@@ -21,6 +21,10 @@
       "id": "restrict-existing-label",
       "type": "skill",
       "prompt": "Make svc-2001's tickets only land on the prod-a security zone nodes.",
+      "turns": [
+        "Make svc-2001's tickets only land on the prod-a security zone nodes.",
+        "Yes, go ahead."
+      ],
       "setup": "setup/op06-prod-a-label.py",
       "expected": [
         "inspects node labels before changing anything",
@@ -38,6 +42,10 @@
       "id": "label-then-target",
       "type": "skill",
       "prompt": "Restrict svc-2001 to kerberator-eval-worker2 only. Label that node gpu-tier=a100 and target that label.",
+      "turns": [
+        "Restrict svc-2001 to kerberator-eval-worker2 only. Label that node gpu-tier=a100 and target that label.",
+        "Yes, go ahead."
+      ],
       "setup": "setup/op06-baseline.py",
       "expected": [
         "checks that gpu-tier is not already used on other nodes before labelling",
@@ -102,6 +110,10 @@
       "id": "tenant-daemon-placement",
       "type": "skill",
       "prompt": "Only run tenant demo's Kerberos daemon on nodes labelled kerberator=enabled.",
+      "turns": [
+        "Only run tenant demo's Kerberos daemon on nodes labelled kerberator=enabled.",
+        "Yes, go ahead."
+      ],
       "setup": "setup/op06-tenant-label.py",
       "expected": [
         "identifies this as Tenant-level placement (Tenant spec.daemon.nodeSelector, where daemon pods run), not a Principal nodeSelector",
@@ -117,6 +129,10 @@
       "id": "tainted-node",
       "type": "e2e",
       "prompt": "svc-2001 must get tickets on the secure node, and only there.",
+      "turns": [
+        "svc-2001 must get tickets on the secure node, and only there.",
+        "Yes, go ahead."
+      ],
       "setup": "setup/op06-tainted-node.py",
       "expected": [
         "finds the secure node: kerberator-eval-worker2, labelled security-zone=secure",
@@ -161,6 +177,10 @@
       "id": "remove-restriction",
       "type": "skill",
       "prompt": "svc-2001 should be on every node again.",
+      "turns": [
+        "svc-2001 should be on every node again.",
+        "Yes, go ahead."
+      ],
       "setup": "setup/op06-selector-settled.py",
       "expected": [
         "finds the current restriction: spec.nodeSelector {security-zone: prod-a}",

@@ -176,6 +176,19 @@ def daemon_nodes():
     return ",".join(sorted(out))
 
 
+def daemon_all_nodes():
+    """Sorted comma list of nodes that have any daemon pod (Ready or not, excluding Terminating)."""
+    po = kn_json("get", "pods", "-l", DAEMON_PODS)
+    out = []
+    for pod in po.get("items", []):
+        if (pod.get("metadata", {}) or {}).get("deletionTimestamp"):
+            continue
+        nn = (pod.get("spec", {}) or {}).get("nodeName")
+        if nn:
+            out.append(nn)
+    return ",".join(sorted(set(out)))
+
+
 def nodes_labelled(selector, csv):
     """Exactly the nodes in `csv` match `selector` ('' means none do)."""
     r = k("get", "nodes", "-l", selector,
@@ -214,6 +227,9 @@ def ccache_nodes(name=None):
                            capture_output=True, text=True)
         if d.returncode == 0:
             out.append(n)
+        elif d.returncode != 1:
+            die(f"docker exec {n} test -e failed with exit {d.returncode} "
+                f"(stderr: {d.stderr.strip()!r}); exit 1 = absent, other = infra error")
     return ",".join(sorted(out))
 
 
@@ -223,12 +239,12 @@ def ccache_on(csv, name=None):
     that is not a targeting error.)"""
     have_list = ccache_nodes(name).split(",") if ccache_nodes(name) else []
     have = set(have_list)
-    daemons = daemon_nodes().split(",") if daemon_nodes() else []
+    all_daemon_nodes = daemon_all_nodes().split(",") if daemon_all_nodes() else []
     want = [n for n in csv.split(",") if n]
     for n in want:
         if n not in have:
             return False
-    for n in daemons:
+    for n in all_daemon_nodes:
         if n not in want and n in have:
             return False
     return True
@@ -307,8 +323,19 @@ def snapshot():
     )
     node_items = k_json("get", "nodes").get("items", [])
     nodes = _canon_nodes(node_items)
+    # User workload pods in default namespace: record uid + nodeName for identity checks.
+    wp_items = k_json("get", "pods", "-n", "default").get("items", [])
+    workload_pods = sorted(
+        [{"name": it.get("metadata", {}).get("name"),
+          "namespace": "default",
+          "uid": it.get("metadata", {}).get("uid"),
+          "nodeName": (it.get("spec", {}) or {}).get("nodeName")}
+         for it in wp_items],
+        key=lambda x: x["name"] or "",
+    )
     return {"tenant": tenant, "principals": principals,
-            "daemonset": daemonset, "secrets": secrets, "nodes": nodes}
+            "daemonset": daemonset, "secrets": secrets, "nodes": nodes,
+            "workload_pods": workload_pods}
 
 
 def save_baseline():

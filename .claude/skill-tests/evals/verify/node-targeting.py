@@ -183,11 +183,29 @@ def main():
                   f"want {json.dumps(want_tsel, separators=(',', ':'))}")
 
     baseline = read_baseline()
+    def _masked_tenant(t):
+        """Return Tenant spec with daemon.nodeSelector and daemon.tolerations masked
+        (the fields an agent is expected to change when --tenant-may-change)."""
+        import copy
+        t2 = copy.deepcopy(t) if t else {}
+        d = t2.setdefault("daemon", {})
+        d.pop("nodeSelector", None)
+        d.pop("tolerations", None)
+        return t2
+
     if not tenant_may_change:
         if after.get("tenant") == baseline.get("tenant"):
             _pass("Tenant spec unchanged")
         else:
             _fail("Tenant spec changed")
+    else:
+        after_masked = _masked_tenant(after.get("tenant", {}))
+        base_masked = _masked_tenant(baseline.get("tenant", {}))
+        if after_masked == base_masked:
+            _pass("Tenant spec unchanged outside daemon.nodeSelector/tolerations")
+        else:
+            _fail("Tenant spec changed beyond daemon.nodeSelector/tolerations "
+                  "(renewMinutes or other fields modified)")
 
     # 5. No collateral: other Principals / this Principal's other fields / Secrets.
     def _strip(pr_list):
@@ -199,6 +217,12 @@ def main():
                 p2["spec"].pop("nodeSelector", None)
             out.append(p2)
         return out
+
+    if not tenant_may_change:
+        if after.get("daemonset") == baseline.get("daemonset"):
+            _pass("DaemonSet placement (image, nodeSelector, tolerations) unchanged")
+        else:
+            _fail("DaemonSet placement changed")
 
     if _strip(after.get("principals", [])) == _strip(baseline.get("principals", [])):
         _pass("no other Principal fields or Principals changed")

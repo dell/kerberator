@@ -201,16 +201,36 @@ def main():
     if expect_pod:
         if "/" not in expect_pod:
             die(f"--expect-pod must be <ns>/<name>, got: {expect_pod}")
-        ns, name = expect_pod.split("/", 1)
+        ep_ns, ep_name = expect_pod.split("/", 1)
+        # Look up baseline identity (UID + node) for this pod.
+        base_pod = next(
+            (p for p in (baseline.get("workload_pods") or [])
+             if p.get("name") == ep_name and p.get("namespace") == ep_ns),
+            None,
+        )
         try:
-            po = k_json("get", "pod", name, "-n", ns)
+            po = k_json("get", "pod", ep_name, "-n", ep_ns)
             phase = (po.get("status", {}) or {}).get("phase")
+            cur_uid = (po.get("metadata", {}) or {}).get("uid")
+            cur_node = (po.get("spec", {}) or {}).get("nodeName")
         except Exception as e:
-            phase = f"<unreadable: {e}>"
+            phase = None
+            cur_uid = None
+            cur_node = None
+            _fail(f"{expect_pod} unreadable: {e}")
         if phase == "Running":
             _pass(f"{expect_pod} still Running (drain-node did not evict it)")
         else:
-            _fail(f"{expect_pod} phase={phase}, want Running")
+            _fail(f"{expect_pod} phase={phase!r}, want Running")
+        if base_pod:
+            if cur_uid == base_pod.get("uid"):
+                _pass(f"{expect_pod} same UID as baseline (not recreated)")
+            else:
+                _fail(f"{expect_pod} UID changed: was {base_pod.get('uid')!r}, now {cur_uid!r}")
+            if cur_node == base_pod.get("nodeName"):
+                _pass(f"{expect_pod} still on same node ({cur_node})")
+            else:
+                _fail(f"{expect_pod} moved: was {base_pod.get('nodeName')!r}, now {cur_node!r}")
 
     if fails == 0:
         print("PASS drained-node")
