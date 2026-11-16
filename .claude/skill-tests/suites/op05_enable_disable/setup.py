@@ -177,8 +177,26 @@ def can_i(ctx: str, ns: str, verb: str, kind: str, as_user: str | None) -> bool:
     args = ["auth", "can-i", verb, kind]
     if as_user:
         args += ["--as", as_user]
-    response = kubectl(ctx, ns, *args)
-    return response.strip().lower() == "yes"
+
+    response = subprocess.run(
+        ["kubectl", "--context", ctx, "--namespace", ns, *args],
+        text=True,
+        capture_output=True,
+        timeout=15,
+        check=False,
+    )
+
+    answer = response.stdout.strip().lower()
+
+    if answer == "yes" and response.returncode == 0:
+        return True
+
+    if answer == "no":
+        return False
+
+    raise SetupError(
+        f"Unable to check RBAC permissions: {response.stderr.strip()}"
+    )
 
 
 def validate_prerequisites(scenario: dict, snapshot_obj: dict, ctx: str, ns: str,
@@ -320,7 +338,7 @@ def run(a: argparse.Namespace) -> dict:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scenario", required=True)
-    p.add_argument("--evals", default=str(Path(__file__).with_name("op05_evals.json")))
+    p.add_argument("--evals", default=str(Path(__file__).with_name("evals.json")))
     p.add_argument("--context", help="Kubernetes context; defaults to evals.json")
     p.add_argument("--namespace", help="Safety check: must match the scenario namespace")
     p.add_argument("--output", required=True, help="Trusted baseline JSON output file")

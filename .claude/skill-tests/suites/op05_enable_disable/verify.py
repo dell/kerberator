@@ -7,7 +7,7 @@ state. Agent actions, approval, and RBAC error handling belong to grade.py.
 
 Usage:
   python verify.py --scenario op05-01 --baseline baseline.json \
-      --evals op05_evals.json --output verification.json
+      --evals evals.json --output verification.json
 
 Exit: 0 PASS; 1 FAIL; 3 INCONCLUSIVE; 2 verification/input error.
 An INCONCLUSIVE result is not a pass. Timeouts/reconciliation failures are
@@ -261,7 +261,9 @@ def run(args: argparse.Namespace) -> dict:
         polls += 1
         checks, spec_reached = compare(baseline, final, scenario)
         status_checks = check_status(final, scenario) if needs_status and spec_reached else []
-        if not needs_status or not spec_reached or result_verdict(status_checks) == "PASS":
+        if not needs_status: 
+            break
+        if spec_reached and result_verdict(status_checks) == "PASS":
             break
         if time.monotonic() >= deadline:
             break
@@ -302,7 +304,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--baseline", required=True, help="setup.py output JSON")
-    parser.add_argument("--evals", default=str(Path(__file__).with_name("op05_evals.json")))
+    parser.add_argument("--evals", default=str(Path(__file__).with_name("evals.json")))
     parser.add_argument("--context", help="Safety check: must equal baseline context")
     parser.add_argument("--namespace", help="Safety check: must equal scenario/baseline namespace")
     parser.add_argument("--timeout", type=float, help="Seconds to await successful reconciliation")
