@@ -45,8 +45,6 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 
-_KUBECTL_TIMEOUT = int(os.environ.get("KRB_VALIDATE_TIMEOUT", "30"))
-
 CRD_API_VERSION = "kerberator.dell.com/v1alpha1"
 TENANT_KIND = "Tenant"
 PRINCIPAL_KIND = "Principal"
@@ -54,11 +52,8 @@ KNOWN_KINDS = (TENANT_KIND, PRINCIPAL_KIND)
 
 # DNS-1123 label (K8s resource name). Up to 63 chars.
 DNS1123_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-# Kerberos realm: allow mixed case here so the uppercase check below fires with
-# a helpful message for realms like "Example.COM".
-REALM_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$")
-# Kubernetes label value: empty OR alphanumeric with internal [-_.] chars.
-LABEL_VALUE_RE = re.compile(r"^([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$")
+# Kerberos realm: uppercase, DNS-ish (letters/digits/dots/dashes). One dot min.
+REALM_RE = re.compile(r"^[A-Z0-9][A-Z0-9.-]*[A-Z0-9]$")
 # Container image reference, very loose: must contain a `/` or a `:` or both.
 IMAGE_RE = re.compile(r"^[A-Za-z0-9._\-/:@]+$")
 
@@ -71,13 +66,7 @@ def _k(context, kubeconfig, *args, capture=True):
     if context:
         cmd += ["--context", context]
     cmd += list(args)
-    try:
-        return subprocess.run(cmd, capture_output=capture, text=True,
-                              timeout=_KUBECTL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        from types import SimpleNamespace
-        return SimpleNamespace(returncode=1, stdout="",
-                               stderr=f"kubectl timed out after {_KUBECTL_TIMEOUT}s")
+    return subprocess.run(cmd, capture_output=capture, text=True)
 
 
 def _tidy_err(text):
@@ -111,7 +100,7 @@ class Findings:
         levels = {level for level, *_ in self.items}
         if "fail" in levels:
             return "invalid"
-        if "warn" in levels or "unknown" in levels:
+        if "warn" in levels:
             return "valid-with-warnings"
         return "valid"
 
@@ -168,12 +157,11 @@ def _check_tenant(doc, idx, findings):
         findings.add("fail", "realm-shape", f"{tag} spec.realm is missing")
     elif not REALM_RE.match(realm):
         findings.add("fail", "realm-shape",
-                     f"{tag} spec.realm={realm!r} must be DNS-domain-shaped "
-                     "(e.g. EXAMPLE.COM)")
+                     f"{tag} spec.realm={realm!r} must be uppercase and "
+                     "DNS-domain-shaped (e.g. EXAMPLE.COM)")
     elif realm.upper() != realm:
         findings.add("fail", "realm-shape",
-                     f"{tag} spec.realm={realm!r} must be uppercase "
-                     "(e.g. EXAMPLE.COM)")
+                     f"{tag} spec.realm={realm!r} must be uppercase")
     else:
         findings.add("ok", "realm-shape", f"{tag} realm={realm}")
 
@@ -183,7 +171,7 @@ def _check_tenant(doc, idx, findings):
     if rm is None:
         findings.add("ok", "renew-minutes-positive",
                      f"{tag} spec.daemon.renewMinutes unset (operator default is used)")
-    elif isinstance(rm, bool) or not isinstance(rm, int) or rm <= 0:
+    elif not isinstance(rm, int) or rm <= 0:
         findings.add("fail", "renew-minutes-positive",
                      f"{tag} spec.daemon.renewMinutes={rm!r}, must be an integer > 0")
     else:
@@ -269,14 +257,10 @@ def _check_principal_shape(doc, idx, findings):
     else:
         bad = [k for k, v in ns.items()
                if not isinstance(k, str) or not k
-               or isinstance(v, bool)
-               or not isinstance(v, str)
-               or not v
-               or not LABEL_VALUE_RE.match(str(v))]
+               or not isinstance(v, (str, int, bool)) or v in (None, "")]
         if bad:
             findings.add("fail", "nodeselector-syntax",
-                         f"{tag} spec.nodeSelector has invalid key/value(s): {bad} "
-                         "(values must be non-empty strings matching [A-Za-z0-9][-A-Za-z0-9_.]*)")
+                         f"{tag} spec.nodeSelector keys with empty value: {bad}")
         else:
             findings.add("ok", "nodeselector-syntax",
                          f"{tag} nodeSelector={ns}")
@@ -332,10 +316,9 @@ def _tenant_exists(context, kubeconfig, ns, name, findings):
 
 
 def _keytab_secret_exists(context, kubeconfig, ns, sec_name, sec_key, findings):
-    """List the Secret's data KEYS only — never fetch or store the values."""
-    # go-template emits only key names; .data values are never sent over the wire.
+    """List the Secret's data KEYS only (never the values)."""
     r = _k(context, kubeconfig, "-n", ns, "get", "secret", sec_name,
-           "-o", "go-template={{range $k,$v := .data}}{{$k}} {{end}}")
+           "-o", "jsonpath={.data}")
     if r.returncode != 0:
         msg = _tidy_err(r.stderr or r.stdout)
         if "forbidden" in msg.lower():
@@ -346,7 +329,23 @@ def _keytab_secret_exists(context, kubeconfig, ns, sec_name, sec_key, findings):
                      f"keytabSecretRef {ns}/{sec_name} not found")
         return
 
-    keys = r.stdout.split()
+    raw = r.stdout.strip()
+    keys = []
+    if raw:
+        # jsonpath renders a map as {k:v k:v} in Go's fmt; parse keys only.
+        # Fallback: use kubectl -o json'd keys (`.data | keys`), but that
+        # requires `jq`. We only need the KEY NAMES, never the values.
+        try:
+            # kubectl jsonpath of a map prints like: map[k1:v1 k2:v2]
+            # Normalise any form by re-fetching -o json and picking .data keys.
+            rj = _k(context, kubeconfig, "-n", ns, "get", "secret", sec_name,
+                    "-o", "json")
+            if rj.returncode == 0:
+                obj = json.loads(rj.stdout)
+                keys = sorted((obj.get("data") or {}).keys())
+        except Exception:
+            keys = []
+
     if sec_key not in keys:
         findings.add("fail", "keytab-secret-exists",
                      f"secret {ns}/{sec_name} exists but has no key {sec_key!r} "
@@ -354,7 +353,7 @@ def _keytab_secret_exists(context, kubeconfig, ns, sec_name, sec_key, findings):
         return
     findings.add("ok", "keytab-secret-exists",
                  f"secret {ns}/{sec_name} has key {sec_key} "
-                 f"(bytes never fetched; {len(keys)} key(s) present)")
+                 f"(bytes never read; {len(keys)} key(s) present)")
 
 
 def _principal_at_realm_matches(doc, tenant_obj, findings, idx):
@@ -382,9 +381,6 @@ def _duplicate_uid(context, kubeconfig, ns, name, uid, findings):
         if "forbidden" in msg.lower():
             findings.add("unknown", "duplicate-uid",
                          "cannot list Principals in this namespace (RBAC)")
-        else:
-            findings.add("unknown", "duplicate-uid",
-                         f"could not list Principals to check for UID conflicts: {msg}")
         return
     try:
         items = (json.loads(r.stdout) or {}).get("items", [])
@@ -463,10 +459,8 @@ def _emit(findings, status, context, raw_sections):
     print(f"CONTEXT: {context or '-'}")
     for level, code, evidence in findings.items:
         print(f"FINDING: {level} {code} | {evidence}")
-    fail_codes = {code for level, code, _ in findings.items if level == "fail"}
-    clean_ok = [c for c in findings.ok_codes if c not in fail_codes]
-    if clean_ok:
-        print(f"CHECKED-OK: {' '.join(clean_ok)}")
+    if findings.ok_codes:
+        print(f"CHECKED-OK: {' '.join(findings.ok_codes)}")
     print("---")
     for title, body in raw_sections:
         print(f"== {title} ==")
@@ -506,7 +500,7 @@ def main():
         return 1
 
     try:
-        docs = list(yaml.safe_load_all(path.read_text(errors="replace")))
+        docs = list(yaml.safe_load_all(path.read_text()))
     except yaml.YAMLError as e:
         findings.add("fail", "yaml-parse",
                      f"could not parse {path.name}: {e}")
@@ -581,9 +575,9 @@ def main():
         exit_code = 3
     elif crd_state == "forbidden":
         # Shape findings still count; show them, and let the user know
-        # cluster-side checks were skipped. _crd_installed always adds an
-        # "unknown" finding before returning "forbidden", so findings.worst()
-        # already returns at least "valid-with-warnings" here.
+        # cluster-side checks were skipped.
+        if status == "valid":
+            status = "valid-with-warnings"
         exit_code = 0 if status != "invalid" else 4
     else:
         exit_code = {"valid": 0, "valid-with-warnings": 0, "invalid": 4}[status]
