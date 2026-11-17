@@ -68,8 +68,10 @@ def fill(value, subs):
 
 
 def file_hashes(ws):
-    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in sorted(ws.iterdir()) if p.is_file()}
+    """Every file under the workspace, so a change in a subfolder (including
+    .claude/skills) is caught too, not only the user's top-level files."""
+    return {str(p.relative_to(ws)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(ws.rglob("*")) if p.is_file()}
 
 
 def contexts_in(kubeconfig):
@@ -256,8 +258,13 @@ def judge(suite, case, turns, model):
            "Glob", "Grep", "Skill", "WebFetch", "WebSearch", "Agent"]
     if model:
         cmd += ["--model", model]
+    # The prompt goes on stdin: `claude -p` with no prompt argument reads it from
+    # there, and a long transcript could exceed the command-line length limit.
     with tempfile.TemporaryDirectory() as empty:
-        r = subprocess.run(cmd, input=prompt, cwd=empty, capture_output=True, text=True, timeout=600)
+        try:
+            r = subprocess.run(cmd, input=prompt, cwd=empty, capture_output=True, text=True, timeout=600)
+        except subprocess.TimeoutExpired:
+            return {"error": "judge timed out after 600s", "raw": ""}
     try:
         text = json.loads(r.stdout).get("result", "")
         # The first complete JSON object; ignores fences and trailing junk.

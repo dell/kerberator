@@ -74,10 +74,13 @@ def main():
 
     # 2 and 5. Compare with the setup snapshot.
     before, after = read_baseline(), snapshot()
-    new = [x for x in after["tenants"] if x not in before["tenants"]]
-    gone = [x for x in before["tenants"] if x not in after["tenants"]]
-    check([(x["namespace"], x["name"]) for x in new] == [(a.ns, a.name)] and not gone,
-          f"exactly one Tenant added ({[(x['namespace'], x['name']) for x in new]}), none changed or removed")
+    b_specs = {(x["namespace"], x["name"]): x.get("spec") for x in before["tenants"]}
+    a_specs = {(x["namespace"], x["name"]): x.get("spec") for x in after["tenants"]}
+    added, removed = sorted(set(a_specs) - set(b_specs)), sorted(set(b_specs) - set(a_specs))
+    check(added == [(a.ns, a.name)] and not removed,
+          f"exactly one Tenant added ({added}), none removed ({removed})")
+    changed = sorted(k for k in b_specs if k in a_specs and a_specs[k] != b_specs[k])
+    check(not changed, "existing Tenants' specs unchanged" + (f": {changed}" if changed else ""))
     for key in sorted(set(before) | set(after)):
         if key == "tenants":
             continue

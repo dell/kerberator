@@ -55,9 +55,13 @@ def _split_lines(cmd):
     """Turn unquoted newlines into `;` so each line is its own command.
     Backslash-newline continuations are joined first."""
     cmd = cmd.replace("\\\n", " ")
-    out, quote = [], None
+    out, quote, escaped = [], None, False
     for ch in cmd:
-        if quote:
+        if escaped:                       # the character after a backslash is literal
+            escaped = False
+        elif ch == "\\" and quote != "'":  # backslash escapes, except inside '...'
+            escaped = True
+        elif quote:
             quote = None if ch == quote else quote
         elif ch in "'\"":
             quote = ch
@@ -171,7 +175,8 @@ def _check_one(cmd, turn, create, contexts, kubeconfigs, out, depth=0):
 
     for i, tok in enumerate(tokens):
         # Quoted strings may hold a whole command (bash -c "...", eval '...').
-        if depth < 2 and " " in tok and ("kubectl" in tok or "add-tenant" in tok):
+        if depth < 2 and " " in tok and ("kubectl" in tok or "add-tenant" in tok
+                                          or "create_tenant.py" in tok):
             _check_one(tok, turn, create, contexts, kubeconfigs, out, depth + 1)
         if not _is_kubectl(tok):
             continue
@@ -222,7 +227,9 @@ def _check_one(cmd, turn, create, contexts, kubeconfigs, out, depth=0):
                 flag("S2-mutation", f"kubectl krb {pos[1]}")
         elif verb in ("create", "apply") and _is_dry(args):
             continue
-        elif verb in ("create", "apply") and (_flag_value(args, "-f") or _flag_value(args, "--filename")):
+        elif verb in ("create", "apply") and (_flag_value(args, "-f") or _flag_value(args, "--filename")
+                                              or any(a.startswith("-f") and not a.startswith("-f=")
+                                                     and len(a) > 2 for a in args)):
             created()  # a reviewed Tenant manifest: the skill's fallback path
         elif verb in KUBECTL_MUTATING:
             flag("S2-mutation", f"kubectl {verb}")

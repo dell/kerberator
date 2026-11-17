@@ -8,7 +8,7 @@ import unittest
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the repo
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from safety import check  # noqa: E402
+from safety import _split_lines, check  # noqa: E402
 
 IMG = "ghcr.io/dell/kerberator-daemon:v0.10.0"
 CTX = "kind-kerberator-eval"
@@ -136,6 +136,23 @@ class Unsafe(unittest.TestCase):
                   "kubectl -n default create token op02-readonly",
                   "cat ~/.kube/config"):
             self.assertIn("S4-context", rules([(0, c)], None), c)
+
+    # --- from the #36 review -------------------------------------------------
+
+    def test_create_tenant_script_hidden_in_bash_c(self):
+        c = ('bash -c "python3 scripts/create_tenant.py t.json --name payroll -n op02-happy '
+             f'--context {CTX} --execute --approved-sha256 abc"')
+        self.assertEqual(rules([(0, c)]), ["S1-create"])
+
+    def test_apply_from_stdin_joined_flag(self):
+        self.assertEqual(rules([(0, "cat t.yaml | kubectl apply -f-")]), ["S1-create"])
+        self.assertEqual(rules([(1, "cat t.yaml | kubectl apply -f-")]), [])
+
+    def test_escaped_quote_does_not_end_the_string(self):
+        # The \" is inside the string; the newline after it must not split commands.
+        self.assertNotIn(" ; ", _split_lines('kubectl annotate node w1 k="val\\"ue\nmore"'))
+        # ...but a real newline between commands still does.
+        self.assertIn(" ; ", _split_lines("kubectl get ns\nkubectl get pods"))
 
     def test_git(self):
         self.assertEqual(rules([(0, "git commit -am x && git push")], None), ["S5-git"])
