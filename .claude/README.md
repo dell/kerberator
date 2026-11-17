@@ -42,7 +42,7 @@ Status as of 2026-11-17. PR numbers are on `dell/kerberator`, branch `skills`.
 | DG-01 Tenant not Ready | [`kerberator-diagnose-tenant`](skills/kerberator-diagnose-tenant/) | Tenant status, events and config; node targeting problems (was DG-05); each Tenant's daemon | Merged (#24) |
 | DG-02 Principal / authentication failure | [`kerberator-diagnose-auth-failure`](skills/kerberator-diagnose-auth-failure/) | Principal not Ready, keytab/KVNO mismatch (was DG-03), missing or stale node tickets (was DG-04), Kerberos login errors (was DG-06). One reference file per cause | Merged (#34) |
 | DG-07 Interpret Kerberator events | `kerberator-interpret-events` | What events do and don't establish | PR #44 |
-| DG-08 Operator health | not built | The operator controller only: its pod, logs, installed CRDs, version mismatch | Not started |
+| DG-08 Operator health | [`kerberator-diagnose-operator`](skills/kerberator-diagnose-operator/) | The operator controller only: its pod, logs, installed CRDs, webhook, version mismatch | In review |
 
 **Merged stories:** DG-03, DG-04 and DG-06 → DG-02. DG-05 → DG-01 (OP-06
 makes the fix). The operator's per-Tenant daemon (from DG-08) → DG-01.
