@@ -24,6 +24,10 @@ shows the same with recent mint failures:
   matters the other way: if failures began right after it, the new keytab is
   the prime suspect, and successes from before it (`[before current keytab]`)
   are not evidence that the key works.
+  **Caveat:** the operator only updates `observed` when the KVNO or enctypes
+  change. A Secret replaced with a different key at the same KVNO and
+  enctypes keeps the old timestamp, so an unchanged `observed` does not
+  prove the keytab bytes are unchanged.
 
 `kubectl krb kvno` ends with "If the KDC has a newer kvno than the Secret,
 run: kubectl krb rotate-keytab". That is the CLI's suggestion, not evidence
@@ -52,8 +56,15 @@ is already set up:
 
 1. `command -v kvno` exists **and** `klist -s` succeeds (the user already
    holds a Kerberos ticket on this machine).
-2. Then `kvno <principal>` (e.g. `kvno svc-2001@EXAMPLE.COM`) prints the
-   KDC's current KVNO for that principal. Quote it.
+2. Then `kvno <principal>` (e.g. `kvno svc-2001@EXAMPLE.COM`) prints a
+   KVNO for that principal. Quote it.
+3. **It may be cached, not current.** `kvno` reuses a service ticket already
+   in the user's cache, and `klist -s` only shows the cache is valid, not
+   that the ticket is fresh. Run `klist` (read-only) first: if it already
+   lists a ticket for that principal, the `kvno` result can be from before a
+   KDC-side change. Report it as "KVNO N (possibly cached)", and treat the KDC
+   KVNO as **not verified**. Never `kdestroy` or edit the user's cache to
+   force a fresh request.
 
 Never run `kinit` yourself, ask for a password, or point at a different
 KDC. If either condition fails, or `kvno` errors, the KDC's KVNO is
@@ -63,13 +74,16 @@ with KDC access reads the principal's current KVNO, e.g. `getprinc` in
 
 ## 4. Interpret
 
+"KDC KVNO" below means a value from a **fresh** lookup (step 3 of section 3,
+or the KDC admin). A possibly-cached `kvno` result counts as not verified.
+
 | Evidence | Assessment |
 |---|---|
 | Secret KVNO N, KDC KVNO higher than N, `key-rejected` | **Confirmed** KVNO mismatch: the KDC has a newer key. Why it happened (a re-export such as `ipa-getkeytab` or `ktadd` without updating the Secret, a password change) is **not** established; offer it as likely causes |
 | Secret KVNO N, KDC KVNO N, `key-rejected` | **Not** a KVNO mismatch. The key material differs at the same KVNO (KDC database rebuilt, key re-randomized without a KVNO bump, or a keytab from another KDC). Say the user's KVNO theory is not supported |
 | Secret KVNO N, KDC KVNO lower than N | Unusual: a keytab from a different KDC or realm, or a KDC restored from backup. Not established which |
 | KDC KVNO not verified, `key-rejected` | **Consistent with** a stale key; a KVNO mismatch is one hypothesis, not a finding. Don't state a KDC KVNO you never saw |
-| KDC KVNO not verified, `key-rejected`, and the **current** keytab minted successfully before failing (`events_since_keytab_read` shows a success, then failures) | The keytab didn't change but the KDC's answer did, so **something changed on the KDC side**: the key was re-randomized or re-exported (KVNO drift is the usual cause), or the principal was re-created. Say this is the strongest lead, still not confirmed without the KDC's KVNO |
+| KDC KVNO not verified, `key-rejected`, and the **current** keytab minted successfully before failing (`events_since_keytab_read` shows a success, then failures) | **Hypothesis:** something changed on the KDC side (key re-randomized or re-exported, which is usually KVNO drift, or the principal re-created). It is only a hypothesis: `observed` doesn't move when a Secret is replaced at the same KVNO and enctypes, so a swapped keytab can look like "the same keytab" here. Say both are possible; neither is confirmed without the KDC's KVNO or knowing whether the Secret was changed |
 | `keytab-no-matching-key` | **Strong** evidence the keytab doesn't match this principal (wrong principal, or no usable enctype). Compare the error's name with the Principal's |
 | `enctype-unsupported` | **Consistent with** an enctype mismatch. Quote `enctypes`; the KDC's supported enctypes are a question for the KDC admin |
 

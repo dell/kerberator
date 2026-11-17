@@ -41,7 +41,8 @@ reported again by then.
 | Signals | Points to | Confidence |
 |---|---|---|
 | `daemon_not_ready_reason=missing-ticket(uid=…)` and that UID's node shows `MintFailed` | The ticket is missing **because** kinit fails. Diagnose the kinit error; the not-ready pod is a symptom | Strong |
-| `missing-ticket(uid=…)` naming a **different** UID than this Principal | Another Principal's failure is making the shared daemon pod not ready, which marks this Principal not Ready too. This Principal may be fine: check its own node result | Strong |
+| `missing-ticket(uid=…)` naming a **different** UID than this Principal | Another Principal's failure is making the shared daemon pod not ready. That only affects this Principal's `Ready` if its own node report is stale or missing (the operator then falls back to pod readiness). This Principal may be fine: check its own node result | Strong |
+| `nodes_missing_report` > 0 | The operator expects this Principal on more nodes (`nodes_expected`) than have a status entry. Those nodes have no evidence either way: not minted, not failed. Check the daemon pods on them (section 4) | Medium |
 | `nodes_no_recent_report` or `nodes_stale_report` > 0, daemon pod ready, no failure events | The daemon stopped reporting for this UID: it may not be renewing (stuck, roster not updated) or events aren't reaching the operator. The ticket may be expiring. **Consistent with** a stale ticket, not proof | Medium |
 | `daemon_not_ready_reason=other` | A real daemon problem: image pull, crash loop, scheduling, missing roster. Quote the pod events from section 4 | Strong for "daemon", quote which |
 | `daemon_not_ready_reason=starting` | The daemon pod started less than 90 seconds ago and its readiness probe hasn't reported yet. Not a fault by itself: re-run `collect.py` in a minute before concluding anything about the daemon | — |

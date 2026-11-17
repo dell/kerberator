@@ -34,7 +34,10 @@ configuration, per-node status, daemon pods, Kerberos events, daemon log
 lines, every Principal in the namespace) and a `SIGNALS` block. Exit 3
 means the Principal was not found: show the list it prints and ask which
 one was meant. Exit 4 means the cluster didn't answer: say so and stop;
-don't guess at the cause of the user's failure.
+don't guess at the cause of the user's failure. Exit 5 means the Principal
+exists or may exist but couldn't be read (Forbidden or another API error):
+quote the error, name the access needed, and stop. Don't look for another
+name.
 
 **2. Classify** with `SIGNALS`, in this order. Stop at the first that
 applies, read its reference file, and follow it:
@@ -45,18 +48,20 @@ applies, read its reference file, and follow it:
 | 2 | `tenant_found=no`, `keytab_secret=missing`, `keytabs_resolved=False` with `kvno_observed=none`, `duplicate_uid=yes`, `realm_match=no`, or Ready reason `NoEligibleNodes` / `NoDaemons` | Principal misconfigured / not Ready | `references/principal-config.md` |
 | 3 | `error_signature` is `key-rejected`, `keytab-no-matching-key` or `enctype-unsupported` | Keytab / KVNO / enctype | `references/keytab-kvno.md` |
 | 4 | Any other `error_signature` except `none` | Kerberos login error (KDC, clock, revoked, …) | `references/kinit-errors.md` |
-| 5 | `daemon_not_ready_reason=other`, `nodes_no_recent_report` or `nodes_stale_report` > 0, or nodes missing | Missing or stale tickets, or a daemon problem | `references/node-tickets.md` |
-| 6 | `nodes_minted` = all nodes, `error_signature=none` | Kerberator has tickets on every node: **not a Kerberator failure**. If the user still can't authenticate, it's likely application-side | `references/node-tickets.md` (last pattern) |
+| 5 | `daemon_not_ready_reason=other`, or `nodes_missing_report`, `nodes_no_recent_report` or `nodes_stale_report` > 0 | Missing or stale tickets, or a daemon problem | `references/node-tickets.md` |
+| 6 | `nodes_minted` = n/n of `nodes_expected`, `nodes_missing_report=0`, `error_signature=none` | Kerberator has tickets on every expected node: **not a Kerberator failure**. If the user still can't authenticate, it's likely application-side | `references/node-tickets.md` (last pattern) |
 
 Two signals that look like causes but usually aren't:
 - **`daemon_pods_ready` below the node count** with
   `daemon_not_ready_reason=missing-ticket(uid=…)`: the daemon's readiness
   probe fails because a ticket file is missing, i.e. *because* a mint
   failed. Diagnose the mint failure; the pod is a symptom.
-- **`principals_not_ready_in_namespace` high**: one Principal's missing
-  ticket makes the shared daemon pod not ready, which marks every Principal
-  on that Tenant not Ready. Use `principals_mint_failing_in_namespace`
-  (each Principal's own results) to decide whether the cause is shared.
+- **`principals_not_ready_in_namespace` high**: each Principal's Ready
+  counts its own `Minted` nodes, so this usually reflects real failures.
+  But a Principal whose own report is stale or missing falls back to the
+  daemon pod's readiness, and that pod can be not ready because of
+  *another* UID. Use `principals_mint_failing_in_namespace` (each
+  Principal's own results) to decide whether the cause is shared.
 
 `node_selector` set: nodes it excludes have no ticket on purpose, and may
 show `Pruned`; that's expected, not a failure.
@@ -72,6 +77,13 @@ keytab bytes (`observed` in section 1). They describe an earlier keytab, so
 an old success doesn't make the current key look intermittent, and an old
 different error isn't a second current cause. Use `events_since_keytab_read`
 for the current keytab's record; mention older events only as history.
+`collect.py` also ignores a failure event that every node has since minted
+past, and events from another Tenant's daemon that share this UID.
+
+The marker is best-effort: the operator only moves `observed` when the
+keytab's KVNO or enctypes change. A Secret replaced with a different key at
+the same KVNO and enctypes keeps the old timestamp, so "the keytab didn't
+change" is never proven by `observed` alone.
 
 ## The KDC side
 

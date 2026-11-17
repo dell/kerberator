@@ -17,12 +17,15 @@ reason says which kind of problem it is:
 | `NoDaemons` | No daemon pods exist for the Tenant | The Tenant's DaemonSet has no pods: Tenant missing, daemon nodeSelector matches nothing, or pods not scheduled. See `node-tickets.md` |
 | `Disabled` / `TenantDisabled` | Switched off on purpose | Not a failure. `kerberator-enable-disable-principal` (OP-05) if it should be on |
 
-**Why `SomeDaemonsNotReady` misleads:** the daemon's readiness probe fails if
-*any* Principal's ticket file is missing on that node. One Principal that
-can't mint therefore makes the daemon pod not ready, and every other
-Principal on the same Tenant then shows `Ready=False` too. Use each
+**Two different "ready"s.** The *daemon pod's* readiness probe fails if
+*any* Principal's ticket file is missing on that node, so one Principal that
+can't mint makes the shared pod not ready. A *Principal's* `Ready` is
+different: the operator counts that Principal's own nodes with `Minted`. So
+another Principal's failure does **not** by itself make this one
+`Ready=False`. It can, when this Principal's own per-node report is stale or
+missing: the operator then falls back to the pod's readiness. Use each
 Principal's own per-node results (`principals_mint_failing_in_namespace`,
-section 7), not their Ready flags, to see who is really failing.
+section 7) to see who is really failing.
 
 ## Configuration checks
 

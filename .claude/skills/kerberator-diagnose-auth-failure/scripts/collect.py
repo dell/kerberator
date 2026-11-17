@@ -20,8 +20,9 @@ Never reads Secret data, never execs into pods, never changes anything.
 A section the caller may not read prints "UNAVAILABLE: <reason>" and the
 script carries on.
 
-Exit 0 = collected, 2 = usage error, 3 = Principal not found / unreadable,
-4 = cluster unreachable. Python 3.8+, standard library only.
+Exit 0 = collected, 2 = usage error, 3 = Principal not found, 4 = cluster
+unreachable, 5 = Principal not readable (Forbidden or another API error).
+Python 3.8+, standard library only.
 """
 import argparse
 import datetime as dt
@@ -160,6 +161,12 @@ def main():
             print("HINT: check the kubeconfig context and any tunnel or VPN it needs, then re-run.")
             return 4
         print(f"UNAVAILABLE: {err}")
+        if "NotFound" not in err:
+            # Forbidden, Unauthorized or another API error: the Principal may
+            # well exist; looking for a different name would be wrong.
+            print("HINT: the Principal could not be read (permission or API error). That is not the same as "
+                  "not existing: report the error and the access needed; don't look for another name.")
+            return 5
         print("HINT: Principal CR names are not UIDs or Kerberos names; 'kubectl krb list' shows the real names.")
         # kubectl plugins need their name before any flags.
         ok, out, _ = kube.run("krb", "list")
@@ -246,6 +253,14 @@ def main():
     nodes = status.get("nodes") or []
     total = failing = minted = pruned = noreport = daemondown = stale = 0
     nodemsg = ""
+    last_minted = None   # newest lastObserved of a Minted node
+    # The operator's own count of eligible nodes for this Principal. status.nodes
+    # can be shorter (a node that never reported has no entry), so counting
+    # entries alone could print 1/1 while the Principal is really 1/2.
+    tstat = status.get("tenant") or {}
+    expected = tstat.get("desiredNodes") if isinstance(tstat.get("desiredNodes"), int) else None
+    if expected is not None:
+        print(f"  expected eligible nodes: {expected}   (status.tenant.desiredNodes; ready {tstat.get('readyNodes', '?')})")
     if not nodes:
         print("  (no nodes reported)")
     else:
@@ -258,6 +273,9 @@ def main():
             age = age_minutes(seen, now)
             if reason == "Minted":
                 minted += 1
+                t_seen = parse_time(seen)
+                if t_seen and (last_minted is None or t_seen > last_minted):
+                    last_minted = t_seen
             elif reason in ("MintFailed", "KeytabMissing"):
                 failing += 1
                 nodemsg = nodemsg or msg
@@ -274,6 +292,14 @@ def main():
             ready = str(bool(n.get("daemonPodReady"))).lower()
             print(f"  {n.get('name', ''):<12} {ready:<6} {reason or '-':<12} {seen or '-':<22} "
                   f"{(str(age) + 'm') if age is not None else '':<8} {msg}")
+    # Nodes the operator expects but that have no status entry at all. Pruned
+    # entries are nodes this Principal is not meant to be on, so they don't
+    # count as reports for an eligible node.
+    if expected is None:
+        expected = total
+    missing = max(0, expected - (total - pruned))
+    if missing:
+        print(f"  {missing} expected node(s) have no status entry for this Principal")
 
     # --- 4. Daemon pods -------------------------------------------------------------
     section(f"4. Daemon pods for tenant {tenant}")
@@ -322,6 +348,7 @@ def main():
     # --- 5. Kerberos events for this UID ------------------------------------------------
     section(f"5. Kerberos events for uid {uid} (newest first, full messages)")
     latest_reason = latest_msg = ""
+    latest_time = None
     # Events from before the operator last read new keytab bytes describe an
     # EARLIER keytab: they say nothing about whether the current key works.
     keytab_read = parse_time(observed)
@@ -330,17 +357,29 @@ def main():
     if ev is None:
         print(f"UNAVAILABLE: {err}")
     else:
-        mine = [e for e in ev.get("items") or []
-                if ((e.get("metadata") or {}).get("annotations") or {}).get("kerberator.dell.com/uid") == str(uid)]
+        # Same UID is not enough: two Tenants in one namespace can both have a
+        # uid 2001. Keep only events from THIS Tenant's daemon pods, current or
+        # deleted ones (their names keep the "<tenant>-kerberator-daemon-" prefix).
+        pod_prefix = f"{tenant}-kerberator-daemon-"
+        same_uid = [e for e in ev.get("items") or []
+                    if ((e.get("metadata") or {}).get("annotations") or {}).get("kerberator.dell.com/uid") == str(uid)]
+        mine = [e for e in same_uid
+                if (lambda o: o.get("name") in podnames or (o.get("name") or "").startswith(pod_prefix))(
+                    e.get("involvedObject") or {})]
         mine.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "", reverse=True)
         if not mine:
             print("  (none: not reported yet, or expired; Kubernetes keeps events for about an hour)")
+        if len(same_uid) > len(mine):
+            print(f"  ({len(same_uid) - len(mine)} event(s) for uid {uid} came from another Tenant's daemon; not shown)")
         if keytab_read:
             since_failed = since_ok = 0
+        current = []   # events not older than the current keytab, newest first
         for i, e in enumerate(mine):
             when = e.get("lastTimestamp") or e.get("eventTime") or ""
             t = parse_time(when)
             older = bool(keytab_read and t and t < keytab_read)
+            if not older:
+                current.append(e)
             if keytab_read and not older:
                 since_failed += e.get("reason") in ("KerberosMintFailed", "KerberosKeytabMissing")
                 since_ok += e.get("reason") == "KerberosMintSucceeded"
@@ -348,8 +387,13 @@ def main():
                 tag = "  [before current keytab]" if older else ""
                 print(f"  [{when}] {e.get('reason', '')} on {(e.get('involvedObject') or {}).get('name', '')} "
                       f"(x{e.get('count') or 1}){tag}: {one_line(e.get('message'))}")
-        if mine:
-            latest_reason, latest_msg = mine[0].get("reason") or "", one_line(mine[0].get("message"))
+        # The current error comes only from events about the current keytab.
+        # An older failure describes a previous keytab, even if it is the
+        # newest event left (e.g. the success after it was never emitted or expired).
+        if current:
+            latest = current[0]
+            latest_reason, latest_msg = latest.get("reason") or "", one_line(latest.get("message"))
+            latest_time = parse_time(latest.get("lastTimestamp") or latest.get("eventTime"))
 
     # --- 6. Daemon logs ------------------------------------------------------------------
     section(f"6. Daemon log lines for {kprinc} (last {args.log_lines} lines per pod)")
@@ -380,9 +424,11 @@ def main():
 
     # --- 7. Other Principals in the namespace ----------------------------------------------
     section(f"7. All Principals in namespace {ns} (their OWN mint results)")
-    # Ready alone is misleading here: one Principal's missing ticket makes the
-    # node's daemon pod not ready, which marks every Principal on that Tenant
-    # not Ready. Each Principal's own per-node reasons show who is really failing.
+    # Each Principal's Ready counts its OWN Minted nodes, so the per-node results
+    # below are the reliable "who is failing" signal. A shared daemon pod that is
+    # not ready (because another UID has no ticket) can still drag a Principal to
+    # not Ready when that Principal's own report is stale or missing and the
+    # operator falls back to pod readiness.
     ns_total = ns_bad = ns_mintfail = 0
     dup_uid = "no"
     allp, err = kube.json("get", "principals.kerberator.dell.com")
@@ -398,7 +444,10 @@ def main():
             ns_bad += oready != "True"
             ns_mintfail += any(r in ("MintFailed", "KeytabMissing") for r in reasons)
             otenant = (ospec.get("tenantRef") or {}).get("name") or ""
-            if on != args.name and ospec.get("uid") == uid and otenant == tenant:
+            # Like the operator's roster: disabled or deleting Principals are not
+            # active, so they can't collide with this one.
+            oactive = not ospec.get("disabled") and not (o.get("metadata") or {}).get("deletionTimestamp")
+            if on != args.name and ospec.get("uid") == uid and otenant == tenant and oactive:
                 dup_uid = f"yes ({on})"
             print(f"  {on}  uid={ospec.get('uid')}  tenant={otenant}  Ready={oready or 'unknown'}  "
                   f"node results: {' '.join(reasons) or 'none'}")
@@ -409,14 +458,17 @@ def main():
     # daemon logs if a pod's latest line for this principal is an error. Events
     # expire after about an hour and logs may be unreadable; the per-node status
     # keeps the last message, so use it when nothing newer is available.
-    if latest_reason in ("KerberosMintFailed", "KerberosKeytabMissing"):
+    # A failure event is not current if every node has minted since it:
+    # no node is failing and the newest Minted report is later than the event.
+    superseded = bool(latest_time and last_minted and failing == 0 and last_minted > latest_time)
+    if latest_reason in ("KerberosMintFailed", "KerberosKeytabMissing") and not superseded:
         errtext = latest_msg
     else:
         errtext = logerr
     if not errtext and failing:
         errtext = nodemsg
     signature = classify(errtext)
-    if latest_reason == "KerberosKeytabMissing":
+    if latest_reason == "KerberosKeytabMissing" and not superseded:
         signature = "keytab-missing"
     realm_match = "unknown"
     if trealm and preal:
@@ -447,12 +499,14 @@ def main():
         ("events_since_keytab_read",
          f"{since_failed} failed, {since_ok} succeeded   (keytab read {observed})" if since_failed is not None
          else "unknown"),
-        ("nodes_minted", f"{minted}/{total}"),
-        ("nodes_failing", f"{failing}/{total}"),
-        ("nodes_no_recent_report", f"{noreport}/{total}"),
-        ("nodes_stale_report", f"{stale}/{total}   (older than 2 x renew interval of {renew_eff}m)"),
-        ("nodes_pruned", f"{pruned}/{total}"),
-        ("nodes_daemon_not_ready", f"{daemondown}/{total}   (no recent report; the daemon pod itself is not ready)"),
+        ("nodes_expected", f"{expected}   (eligible nodes, from status.tenant.desiredNodes)"),
+        ("nodes_minted", f"{minted}/{expected}"),
+        ("nodes_failing", f"{failing}/{expected}"),
+        ("nodes_missing_report", f"{missing}/{expected}   (expected but no status entry at all)"),
+        ("nodes_no_recent_report", f"{noreport}/{expected}"),
+        ("nodes_stale_report", f"{stale}/{expected}   (older than 2 x renew interval of {renew_eff}m)"),
+        ("nodes_pruned", f"{pruned}   (not eligible for this Principal)"),
+        ("nodes_daemon_not_ready", f"{daemondown}/{expected}   (no recent report; the daemon pod itself is not ready)"),
         ("daemon_pods_ready", f"{pods_ready}/{pods_total}"),
         ("daemon_not_ready_reason", daemon_reason),
         ("principals_mint_failing_in_namespace", f"{ns_mintfail}/{ns_total}"),

@@ -59,7 +59,7 @@ TENANT = {"metadata": {"name": "demo"},
 
 
 def pods(ready=True, started="2000-01-01T00:00:00Z"):
-    return {"items": [{"metadata": {"name": "demo-daemon-abc"}, "spec": {"nodeName": "node-1"},
+    return {"items": [{"metadata": {"name": "demo-kerberator-daemon-abc"}, "spec": {"nodeName": "node-1"},
                        "status": {"phase": "Running", "startTime": started,
                                   "containerStatuses": [{"ready": ready, "restartCount": 0,
                                                          "state": {"running": {"startedAt": started}}}]}}]}
@@ -68,7 +68,7 @@ def pods(ready=True, started="2000-01-01T00:00:00Z"):
 def uid_event(reason, msg):
     return {"items": [{"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}},
                        "lastTimestamp": NOW, "reason": reason, "count": 3, "message": msg,
-                       "involvedObject": {"name": "demo-daemon-abc"}}]}
+                       "involvedObject": {"name": "demo-kerberator-daemon-abc"}}]}
 
 
 def J(obj):
@@ -91,7 +91,7 @@ def scenario(p=None, others=None, tenant=TENANT, pod_ready=True, pod_events=None
         {"match": ["get pods"], "stdout": J(pods(pod_ready, pod_started))},
         {"match": ["get events --field-selector"], "stdout": J(pod_events or {"items": []})},
         {"match": ["get events"], "stdout": J(events or {"items": []})},
-        {"match": ["logs demo-daemon-abc"], "stdout": logs},
+        {"match": ["logs demo-kerberator-daemon-abc"], "stdout": logs},
         {"match": ["krb list"], "stdout": "NAMESPACE KIND NAME\nkerberator-demo Principal svc-2001\n"},
     ]
     return rules
@@ -237,13 +237,13 @@ class Collect(unittest.TestCase):
         p["status"]["keytabObservedAt"] = "2030-01-01T10:00:00Z"
         events = {"items": [
             {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": "2030-01-01T10:05:00Z",
-             "reason": "KerberosMintFailed", "message": KINIT_FAIL, "involvedObject": {"name": "pod-new"}},
+             "reason": "KerberosMintFailed", "message": KINIT_FAIL, "involvedObject": {"name": "demo-kerberator-daemon-new"}},
             {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": "2030-01-01T09:00:00Z",
-             "reason": "KerberosMintSucceeded", "message": "Minted", "involvedObject": {"name": "pod-old"}}]}
+             "reason": "KerberosMintSucceeded", "message": "Minted", "involvedObject": {"name": "demo-kerberator-daemon-old"}}]}
         _, out, s = run(scenario(p=p, events=events))
         self.assertTrue(s["events_since_keytab_read"].startswith("1 failed, 0 succeeded"), s["events_since_keytab_read"])
         self.assertIn("(x1)  [before current keytab]: Minted", out)
-        self.assertNotIn("pod-new (x1)  [before", out)
+        self.assertNotIn("demo-kerberator-daemon-new (x1)  [before", out)
 
     def test_old_error_then_success_is_resolved(self):
         logs = ("ERROR: Failed to mint cache for svc-2001@EXAMPLE.COM: Password incorrect\n)\n"
@@ -266,6 +266,87 @@ class Collect(unittest.TestCase):
         self.assertEqual(rc, 4)
         self.assertIn("UNREACHABLE", out)
         self.assertNotIn("krb list", out)
+
+    # --- regression tests for the #34 review -------------------------------
+
+    def test_forbidden_initial_read_is_not_a_wrong_name(self):
+        rc, out, _ = run(scenario(overrides=[{"match": ["get principals.kerberator.dell.com svc-2001"], "rc": 1,
+                         "stderr": 'Error from server (Forbidden): principals.kerberator.dell.com "svc-2001" is forbidden'}]))
+        self.assertEqual(rc, 5)
+        self.assertIn("permission or API error", out)
+        self.assertNotIn("krb list", out)
+
+    def test_events_from_another_tenant_with_the_same_uid_are_ignored(self):
+        # Tenant "other" also has a uid 2001 and its daemon reports clock skew.
+        # This Principal (Tenant "demo") is healthy and must not inherit that error.
+        events = {"items": [
+            {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": NOW,
+             "reason": "KerberosMintFailed", "message": "kinit: Clock skew too great",
+             "involvedObject": {"name": "other-kerberator-daemon-zzz"}},
+            {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": NOW,
+             "reason": "KerberosMintSucceeded", "message": "Minted",
+             "involvedObject": {"name": "demo-kerberator-daemon-abc"}}]}
+        _, out, s = run(scenario(events=events))
+        self.assertEqual(s["error_signature"], "none")
+        self.assertEqual(s["latest_event"], "KerberosMintSucceeded")
+        self.assertIn("came from another Tenant's daemon", out)
+        self.assertNotIn("Clock skew", out)
+
+    def test_failure_before_rotation_is_not_the_current_error(self):
+        # Failed with the old keytab at 09:00; the new keytab was read at 10:00
+        # and minted at 10:05 (its success event expired). Not a current failure.
+        p = principal(seen="2030-01-01T10:05:00Z")
+        p["status"]["keytabObservedAt"] = "2030-01-01T10:00:00Z"
+        events = {"items": [
+            {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": "2030-01-01T09:00:00Z",
+             "reason": "KerberosMintFailed", "message": KINIT_FAIL,
+             "involvedObject": {"name": "demo-kerberator-daemon-old"}}]}
+        _, out, s = run(scenario(p=p, events=events))
+        self.assertEqual(s["error_signature"], "none")
+        self.assertEqual(s["latest_event"], "none")
+        self.assertIn("[before current keytab]", out)
+
+    def test_failure_superseded_by_a_later_mint_on_every_node(self):
+        # Same keytab throughout: failed at 09:00, every node minted at 10:05.
+        p = principal(seen="2030-01-01T10:05:00Z")
+        p["status"]["keytabObservedAt"] = "2030-01-01T08:00:00Z"
+        events = {"items": [
+            {"metadata": {"annotations": {"kerberator.dell.com/uid": "2001"}}, "lastTimestamp": "2030-01-01T09:00:00Z",
+             "reason": "KerberosMintFailed", "message": KINIT_FAIL,
+             "involvedObject": {"name": "demo-kerberator-daemon-abc"}}]}
+        _, _, s = run(scenario(p=p, events=events))
+        self.assertEqual(s["error_signature"], "none")
+        # ...but a node still failing keeps the failure current.
+        p2 = principal(reason="MintFailed", msg=KINIT_FAIL, seen="2030-01-01T10:05:00Z")
+        p2["status"]["keytabObservedAt"] = "2030-01-01T08:00:00Z"
+        _, _, s2 = run(scenario(p=p2, events=events))
+        self.assertEqual(s2["error_signature"], "key-rejected")
+
+    def test_node_counts_use_the_expected_footprint(self):
+        # The operator expects 2 nodes; only one has a status entry.
+        p = principal()
+        p["status"]["tenant"] = {"desiredNodes": 2, "readyNodes": 1, "readySummary": "1/2"}
+        _, out, s = run(scenario(p=p))
+        self.assertEqual(s["nodes_expected"], "2")
+        self.assertEqual(s["nodes_minted"], "1/2")
+        self.assertEqual(s["nodes_missing_report"], "1/2")
+        self.assertIn("1 expected node(s) have no status entry", out)
+        # No status entries at all.
+        p["status"]["nodes"] = []
+        _, _, s = run(scenario(p=p))
+        self.assertEqual(s["nodes_minted"], "0/2")
+        self.assertEqual(s["nodes_missing_report"], "2/2")
+
+    def test_inactive_principals_are_not_duplicate_uids(self):
+        disabled = principal(name="old-disabled", disabled=True)
+        _, _, s = run(scenario(others=[disabled]))
+        self.assertEqual(s["duplicate_uid"], "no")
+        deleting = principal(name="being-deleted")
+        deleting["metadata"]["deletionTimestamp"] = NOW
+        _, _, s = run(scenario(others=[deleting]))
+        self.assertEqual(s["duplicate_uid"], "no")
+        _, _, s = run(scenario(others=[principal(name="active-dup")]))
+        self.assertEqual(s["duplicate_uid"], "yes (active-dup)")
 
     def test_never_reads_secret_data(self):
         # Every secret call must be metadata-only (-o name).
