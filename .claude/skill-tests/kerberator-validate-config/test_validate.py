@@ -113,10 +113,18 @@ class ValidatorTests(unittest.TestCase):
             return completed(args, CRDS)
         return completed(args, stderr="unexpected kubectl invocation", returncode=1)
 
+    @staticmethod
+    def status_from(output):
+        lines = [line for line in output.splitlines()
+                 if line.startswith("STATUS: ")]
+        if len(lines) != 1:
+            return None
+        return lines[0].removeprefix("STATUS: ")
+
     def test_valid_tenant_passes_shape_and_crd_checks(self):
         code, output = self.run_validator(VALID_TENANT)
         self.assertEqual(code, 0, output)
-        self.assertIn("STATUS: valid", output)
+        self.assertEqual(self.status_from(output), "valid", output)
         self.assertIn("FINDING: ok realm-shape", output)
         self.assertIn("FINDING: ok crd-installed", output)
 
@@ -149,7 +157,8 @@ class ValidatorTests(unittest.TestCase):
         code, output = self.run_validator(yaml_text)
         self.assertEqual(code, 4, output)
         self.assertIn("FINDING: fail nodeselector-syntax", output)
-    def test_cluster_connection_failure_must_not_report_valid(self):
+
+    def test_cluster_connection_failure_reports_warning_status(self):
         def unavailable(args, **kwargs):
             return completed(
                 args,
@@ -158,15 +167,30 @@ class ValidatorTests(unittest.TestCase):
             )
 
         code, output = self.run_validator(VALID_TENANT, unavailable)
-        self.assertNotIn(
-            "STATUS: valid\n", output,
-            "Cluster-side validation was unavailable but validator reported valid",
-        )
+        self.assertEqual(self.status_from(output), "valid-with-warnings", output)
         self.assertIn("unknown crd-installed", output)
-        self.assertNotEqual(code, 0)
+        self.assertEqual(code, 0, output)
+
+    def test_kubectl_timeout_is_bounded_and_reported_as_warning(self):
+        calls = []
+
+        def timeout_immediately(args, **kwargs):
+            calls.append((args, kwargs))
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+        code, output = self.run_validator(VALID_TENANT, timeout_immediately)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][1].get("timeout"), validator._KUBECTL_TIMEOUT)
+        self.assertEqual(validator._KUBECTL_TIMEOUT, 30)
+        self.assertEqual(self.status_from(output), "valid-with-warnings", output)
+        self.assertIn("unknown crd-installed", output)
+        self.assertIn("timed out after 30s", output)
+        self.assertEqual(code, 0, output)
 
     def test_secret_values_never_appear_in_output(self):
         secret_sentinel = "THIS_IS_SECRET_BASE64_SENTINEL"
+        secret_queries = []
 
         def fake_kubectl(args, **kwargs):
             if "get" in args and "crd" in args:
@@ -179,19 +203,29 @@ class ValidatorTests(unittest.TestCase):
                     "metadata": {"name": "demo"},
                     "spec": {"realm": "EXAMPLE.COM"},
                 }))
-            if "get" in args and "secret" in args and "-o" in args:
-                if "jsonpath={.data}" in args:
-                    return completed(args, f"map[keytab:{secret_sentinel}]")
-                if "json" in args:
-                    import json
-                    return completed(args, json.dumps({
-                        "data": {"keytab": secret_sentinel}
-                    }))
+            if "get" in args and "secret" in args:
+                secret_queries.append(args)
+                if "-o" not in args or not any(
+                    arg.startswith("go-template=") and ".data" in arg
+                    and "{{$k}}" in arg and "{{$v}}" not in arg
+                    for arg in args
+                ):
+                    raise AssertionError(
+                        f"Secret values must not be queried: {args!r}"
+                    )
+                return completed(args, "keytab ")
             if "get" in args and "principals" in args:
                 return completed(args, '{"items":[]}')
             return completed(args, stderr="forbidden", returncode=1)
 
         code, output = self.run_validator(VALID_PRINCIPAL, fake_kubectl)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.status_from(output), "valid", output)
+        self.assertIn("FINDING: ok keytab-secret-exists", output)
+        self.assertTrue(secret_queries, "Expected the Secret lookup to run")
+        self.assertEqual(len(secret_queries), 1)
+        self.assertIn("-o", secret_queries[0])
+        self.assertTrue(any("go-template=" in arg for arg in secret_queries[0]))
         self.assertNotIn(secret_sentinel, output)
         self.assertNotIn("keytab:", output)
 

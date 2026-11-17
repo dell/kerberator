@@ -24,8 +24,7 @@ Exit codes:
 
 Hard rules this script enforces:
   - Never reads Secret `.data[key]` bytes. Secret presence is checked via
-    `jsonpath={.data}` which returns a map of key → base64; we parse keys
-    only and discard the values.
+    a go-template that emits key names only.
   - Never mutates the cluster. Only `get` subcommands are used.
 """
 
@@ -44,6 +43,8 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+
+_KUBECTL_TIMEOUT = int(os.environ.get("KRB_VALIDATE_TIMEOUT", "30"))
 
 CRD_API_VERSION = "kerberator.dell.com/v1alpha1"
 TENANT_KIND = "Tenant"
@@ -66,7 +67,13 @@ def _k(context, kubeconfig, *args, capture=True):
     if context:
         cmd += ["--context", context]
     cmd += list(args)
-    return subprocess.run(cmd, capture_output=capture, text=True)
+    try:
+        return subprocess.run(cmd, capture_output=capture, text=True,
+                              timeout=_KUBECTL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=1, stdout="",
+                               stderr=f"kubectl timed out after {_KUBECTL_TIMEOUT}s")
 
 
 def _tidy_err(text):
@@ -100,7 +107,7 @@ class Findings:
         levels = {level for level, *_ in self.items}
         if "fail" in levels:
             return "invalid"
-        if "warn" in levels:
+        if "warn" in levels or "unknown" in levels:
             return "valid-with-warnings"
         return "valid"
 
@@ -171,7 +178,7 @@ def _check_tenant(doc, idx, findings):
     if rm is None:
         findings.add("ok", "renew-minutes-positive",
                      f"{tag} spec.daemon.renewMinutes unset (operator default is used)")
-    elif not isinstance(rm, int) or rm <= 0:
+    elif not isinstance(rm, int) or isinstance(rm, bool) or rm <= 0:
         findings.add("fail", "renew-minutes-positive",
                      f"{tag} spec.daemon.renewMinutes={rm!r}, must be an integer > 0")
     else:
@@ -318,7 +325,7 @@ def _tenant_exists(context, kubeconfig, ns, name, findings):
 def _keytab_secret_exists(context, kubeconfig, ns, sec_name, sec_key, findings):
     """List the Secret's data KEYS only (never the values)."""
     r = _k(context, kubeconfig, "-n", ns, "get", "secret", sec_name,
-           "-o", "jsonpath={.data}")
+           "-o", "go-template={{range $k,$v := .data}}{{$k}} {{end}}")
     if r.returncode != 0:
         msg = _tidy_err(r.stderr or r.stdout)
         if "forbidden" in msg.lower():
@@ -329,22 +336,7 @@ def _keytab_secret_exists(context, kubeconfig, ns, sec_name, sec_key, findings):
                      f"keytabSecretRef {ns}/{sec_name} not found")
         return
 
-    raw = r.stdout.strip()
-    keys = []
-    if raw:
-        # jsonpath renders a map as {k:v k:v} in Go's fmt; parse keys only.
-        # Fallback: use kubectl -o json'd keys (`.data | keys`), but that
-        # requires `jq`. We only need the KEY NAMES, never the values.
-        try:
-            # kubectl jsonpath of a map prints like: map[k1:v1 k2:v2]
-            # Normalise any form by re-fetching -o json and picking .data keys.
-            rj = _k(context, kubeconfig, "-n", ns, "get", "secret", sec_name,
-                    "-o", "json")
-            if rj.returncode == 0:
-                obj = json.loads(rj.stdout)
-                keys = sorted((obj.get("data") or {}).keys())
-        except Exception:
-            keys = []
+    keys = r.stdout.split()
 
     if sec_key not in keys:
         findings.add("fail", "keytab-secret-exists",
