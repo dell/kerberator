@@ -342,7 +342,7 @@ End with a short report in two parts, and keep them separate:
 | `Forbidden` with no webhook named | **(code)** | Account lacks permission | Stop; name the missing permission. Do not try other commands to get around it. |
 | `rollout status` times out | **(code)** | New pods are not becoming ready | Do not re-patch. Run `kubectl -n <ns> get pods -o wide` and `kubectl krb describe principal <name>`, report them, and offer the rollback. |
 | `KeytabsResolved` False, `KeytabSecretMissing` | **(code)** | The Secret or key did not resolve, and the Principal left the roster | Report it and offer the rollback. |
-| `KerberosMintFailed` newer than the patch | **(code)** | KDC or key problem | Report the nodes and messages, and offer the rollback. Diagnosing is DG-06 or DG-03. Do not patch again to experiment. |
+| `KerberosMintFailed` newer than the patch | **(code)** | KDC or key problem | Report the nodes and messages, and offer the rollback. Diagnosing is `kerberator-diagnose-auth-failure` (DG-02). Do not patch again to experiment. |
 
 To roll back, repeat steps 3 to 7 with the rollback patch, including
 approval. It is a new change, so do not run it on your own. A rollback of a
@@ -371,4 +371,4 @@ field that rolls pods re-mints too, as it did for `renewMinutes`.
 Creating Tenants or Principals (OP-03), replacing keytab contents (OP-04),
 disabling or enabling (OP-05), moving a Principal to another Tenant,
 generating keytabs on the KDC, and diagnosing why a Principal is not Ready
-(DG-03, DG-06). Say so and stop when a request needs one of these.
+(`kerberator-diagnose-auth-failure` (DG-02)). Say so and stop when a request needs one of these.
