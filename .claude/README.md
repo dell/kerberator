@@ -12,36 +12,36 @@ and the tests for them. Each skill is a folder with a `SKILL.md`; agents
 │   ├── scripts/              Python helpers the skill runs (read-only checks, guarded actions)
 │   ├── references/           detail read only when needed
 │   └── tests/                unit tests for the scripts (no cluster needed)
-└── skill-tests/<skill-name>/ agent evals for that skill (location under review, see below)
+└── skill-tests/              agent evals, kept apart from the skills (see Conventions)
 ```
 
 ## Skills
 
-Status as of 2026-11-11. PR numbers are on `dell/kerberator`, branch `skills`.
+Status as of 2026-11-17. PR numbers are on `dell/kerberator`, branch `skills`.
 
 ### Operations
 
 | Story | Skill | Status |
 |---|---|---|
-| OP-01 Inspect Tenants and Principals | [`kerberator-inspect`](skills/kerberator-inspect/) | Merged; Python conversion in #23 |
-| OP-02 Create a Tenant | [`kerberator-create-tenant`](skills/kerberator-create-tenant/) | Merged (#20); fixes in #30 |
-| OP-03 Register a Principal | [`kerberator-register-principal`](skills/kerberator-register-principal/) | Merged (#19); known bugs, fix pending |
+| OP-01 Inspect Tenants and Principals | [`kerberator-inspect`](skills/kerberator-inspect/) | Merged (Python since #23) |
+| OP-02 Create a Tenant | [`kerberator-create-tenant`](skills/kerberator-create-tenant/) | Merged (#20, discovery-first rewrite #30) |
+| OP-03 Register a Principal | [`kerberator-register-principal`](skills/kerberator-register-principal/) | Merged (#19); tests in #42 |
 | OP-04 Rotate a keytab | [`kerberator-rotate-keytab`](skills/kerberator-rotate-keytab/) | Merged |
 | OP-05 Enable or disable a Principal | [`kerberator-enable-disable-principal`](skills/kerberator-enable-disable-principal/) | Merged |
 | OP-06 Configure node targeting | [`kerberator-configure-node-targeting`](skills/kerberator-configure-node-targeting/) | Merged (#18) |
-| OP-07 Drain a node | [`kerberator-drain-node`](skills/kerberator-drain-node/) | Merged (draft) |
-| OP-08 Validate a Tenant/Principal YAML | `kerberator-validate-config` | PR #32 |
-| OP-09 Update a Tenant or Principal | [`kerberator-update-tenant-principal`](skills/kerberator-update-tenant-principal/) | Merged |
+| OP-07 Drain a node | [`kerberator-drain-node`](skills/kerberator-drain-node/) | Merged (#40); evals in #33 |
+| OP-08 Validate a Tenant/Principal YAML | [`kerberator-validate-config`](skills/kerberator-validate-config/) | Merged (#32); tests in #43 |
+| OP-09 Update a Tenant or Principal | [`kerberator-update-tenant-principal`](skills/kerberator-update-tenant-principal/) | Merged; tests in #45 |
 | OP-10 Remove a Principal or Tenant | [`kerberator-remove-principal-or-tenant`](skills/kerberator-remove-principal-or-tenant/) | Merged (#29) |
-| OP-11 Install or upgrade Kerberator | `kerberator-install-upgrade` | PR #28; tests in #31 |
+| OP-11 Install or upgrade Kerberator | [`kerberator-install-upgrade`](skills/kerberator-install-upgrade/) | Merged (#28); tests in #31 |
 
 ### Diagnostics
 
 | Story | Skill | Covers | Status |
 |---|---|---|---|
-| DG-01 Tenant not Ready | `kerberator-diagnose-tenant` | Tenant status, events and config; node targeting problems (was DG-05); each Tenant's daemon | PR #24 |
-| DG-02 Principal / authentication failure | [`kerberator-diagnose-auth-failure`](skills/kerberator-diagnose-auth-failure/) | Principal not Ready, keytab/KVNO mismatch (was DG-03), missing or stale node tickets (was DG-04), Kerberos login errors (was DG-06). One reference file per cause | Merged as DG-06; DG-02 merge in progress |
-| DG-07 Interpret Kerberator events | not built | What events do and don't establish | Not started |
+| DG-01 Tenant not Ready | [`kerberator-diagnose-tenant`](skills/kerberator-diagnose-tenant/) | Tenant status, events and config; node targeting problems (was DG-05); each Tenant's daemon | Merged (#24) |
+| DG-02 Principal / authentication failure | [`kerberator-diagnose-auth-failure`](skills/kerberator-diagnose-auth-failure/) | Principal not Ready, keytab/KVNO mismatch (was DG-03), missing or stale node tickets (was DG-04), Kerberos login errors (was DG-06). One reference file per cause | Merged (#34) |
+| DG-07 Interpret Kerberator events | `kerberator-interpret-events` | What events do and don't establish | PR #44 |
 | DG-08 Operator health | not built | The operator controller only: its pod, logs, installed CRDs, version mismatch | Not started |
 
 **Merged stories:** DG-03, DG-04 and DG-06 → DG-02. DG-05 → DG-01 (OP-06
@@ -68,9 +68,10 @@ makes the fix). The operator's per-Tenant daemon (from DG-08) → DG-01.
   keys with a go-template that prints key names only. No `git commit`/`git push`
   from a skill.
 - **Agent evals** are kept apart from the skill folders, so an agent using a
-  skill can't read the expected answers. Today they live in
-  `skill-tests/<skill-name>/`; moving them to a root `evals/` folder, as in the
-  team's testing process document, is under discussion (#25).
+  skill can't read the expected answers. New suites go in
+  `skill-tests/suites/<story>_<name>/` (`evals.json`, `setup.py`, `verify.py`,
+  `grade.py`), as in the team's evaluation guide; `suites/op05_enable_disable/`
+  is the first. Older suites still live in `skill-tests/<skill-name>/`.
 - **Branches and PRs:** branch from `skills` as `<github-user>/<story>-<short-name>`,
   open the PR into `skills`, signed-off commits (`git commit -s`), at least one
   review before merging. PRs that touch `.claude/` request the skills team
