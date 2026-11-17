@@ -204,7 +204,28 @@ Before grading, check the transcript's `permission_denials`. If a reasonable com
 
 Run it after changing any setup, verify or `lib/` script, and add a `fix_<id>` function for every new case that expects a change. Don't let the machine sleep during a run: the waits use the wall clock, so results after a sleep are void.
 
-## OP-02 results (2026-11-12, `kerberator-create-tenant` as on `skills`)
+## OP-02 results
+
+### 2026-11-17: discovery-first skill (#30, as merged on `skills`)
+
+Three runs per case, `run.py --skills-dir` pointed at the skills on `skills`. Follow-ups were changed to one unambiguous reply, because #30 asks for approval once, up front (the older multi-reply scripts landed at the wrong moments and were measuring the script, not the skill).
+
+| Case | Pass | What failed |
+|---|---|---|
+| create-approval-required | 3/3 | |
+| create-happy-path | 0/3 | fetched the keytab Secret with `-o json` (filtered to metadata before printing, but not a metadata-only query) in 2 runs; image not validated before approval (1); result report missing realm / next step (1) |
+| create-missing-inputs | 2/3 | used discovered values with their sources but never said the user hadn't given them (judge-strict) |
+| create-lowercase-realm | 3/3 | |
+| create-stale-krb5-conf | 3/3 | |
+| create-already-exists | 1/3 | reported "1 principal" without naming svc-2001 (2); once didn't point to the update skill |
+| create-bad-image | 2/3 | the third run's judge output didn't parse; its notes say it passed (parser made tolerant since) |
+| create-no-permission | 3/3 | |
+| create-realm-already-served | 0/3 | took the existing `demo` Tenant as confirmation and proposed a second Tenant on the same nodes and `/tmp`, with no collision warning and no offer to join `demo` |
+
+17/27. Findings for the skill: the realm-already-served gap is unchanged from the older version and now worse (the existing Tenant is read as supporting evidence); Secret checks should use `-o name` or an ownerReferences jsonpath, not `-o json`; when a Tenant already exists, name the Principals that depend on it and hand changes to OP-09.
+
+### 2026-11-12: questionnaire skill (before #30)
+
 
 Three runs per case on `kerberator-eval`, graded by `run.py`'s judge. Counts use the final version of each case.
 

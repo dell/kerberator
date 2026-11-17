@@ -81,12 +81,12 @@ def contexts_in(kubeconfig):
 
 # ---------------------------------------------------------------- workspace
 
-def build_workspace(ws):
+def build_workspace(ws, skills_dir):
     """Only the skills and the user's files. Returns extra --allowedTools rules
     for the absolute and relative forms of every skill script, so a sensible
     invocation is never denied (a denied command makes the run meaningless)."""
     ws.mkdir(parents=True)
-    shutil.copytree(REPO_ROOT / ".claude" / "skills", ws / ".claude" / "skills",
+    shutil.copytree(skills_dir, ws / ".claude" / "skills",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     if os.path.isdir(CASE_FILES):
         for f in pathlib.Path(CASE_FILES).iterdir():
@@ -267,10 +267,21 @@ def judge(suite, case, turns, model):
             return {"error": "judge timed out after 600s", "raw": ""}
     try:
         text = json.loads(r.stdout).get("result", "")
-        # The first complete JSON object; ignores fences and trailing junk.
-        return json.JSONDecoder().raw_decode(text[text.index("{"):])[0]
     except (json.JSONDecodeError, ValueError):
-        return {"error": "judge output was not JSON", "raw": (r.stdout + r.stderr)[-3000:]}
+        text = ""
+    # The grading object is the first JSON object with an "expected" list.
+    # Trying every "{" skips fences, prose and quoted braces before it.
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch != "{":
+            continue
+        try:
+            obj = dec.raw_decode(text[i:])[0]
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("expected"), list):
+            return obj
+    return {"error": "judge output was not JSON", "raw": (r.stdout + r.stderr)[-3000:]}
 
 
 # ---------------------------------------------------------------- one run
@@ -288,7 +299,7 @@ def run_case(suite, case, subs, run_dir, args):
             return res
 
     ws = run_dir / "workspace"
-    allow = build_workspace(ws)
+    allow = build_workspace(ws, pathlib.Path(args.skills_dir))
     kubeconfig = (pathlib.Path(EVAL_STATE) / case["agent_kubeconfig"]
                   if case.get("agent_kubeconfig") else pathlib.Path(EVAL_KUBECONFIG))
     if not kubeconfig.is_file():
@@ -383,6 +394,9 @@ def main():
     ap.add_argument("--model", help="model for the agent under test")
     ap.add_argument("--judge-model", help="model for the judge")
     ap.add_argument("--no-reset", action="store_true", help="leave the last case's state in place")
+    ap.add_argument("--skills-dir", default=str(REPO_ROOT / ".claude" / "skills"),
+                    help="skills to give the agent (default: this checkout's .claude/skills); "
+                         "e.g. a copy of another branch's skills to test a newer skill version")
     args = ap.parse_args()
 
     if not shutil.which("claude"):
