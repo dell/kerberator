@@ -110,9 +110,3 @@ If the evidence supports KVNO drift, explain that the repository documents the `
 Recommend that the authorized operator follow the documented rotation procedure. Do not perform the rotation in this skill.
 
 Do not recommend simply applying a new Secret as a complete fix: the repository documents that updating a Secret alone may not immediately trigger a new mint.
-
-## Shared event interpretation reference
-
-When interpreting Kerberator Events, consult the shared
-[DG-07 event interpretation reference](../kerberator-interpret-events/references/event-interpretation.md).
-Do not duplicate event semantics or treat an event reason alone as proof of root cause.
