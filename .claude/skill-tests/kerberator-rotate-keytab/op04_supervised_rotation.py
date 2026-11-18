@@ -64,7 +64,7 @@ def main():
     repo=script.parents[2] if script.parent.name=='skill-tests' and script.parent.parent.name=='.claude' else Path.cwd().resolve()
     skill=repo/'.claude'/'skills'/SKILL/'scripts'
     tests=repo/'.claude'/'skill-tests'/SKILL
-    for file in (skill/'precheck.sh',skill/'rotate.sh',skill/'verify.sh',tests/'verify.sh'):
+    for file in (skill/'precheck.py',skill/'rotate.py',skill/'verify.py',tests/'verify.sh'):
         if not file.is_file(): raise SystemExit('Missing required file: '+str(file))
     keytab=(repo/args.keytab).resolve() if not Path(args.keytab).is_absolute() else Path(args.keytab).resolve()
     if not keytab.is_file(): raise SystemExit('Keytab does not exist: '+str(keytab))
@@ -101,7 +101,7 @@ def main():
     rc,out,err=run(['bash',str(tests/'verify.sh'),'snapshot',str(before)],repo,env)
     if rc: finish('Before snapshot failed: '+err[:200])
     print('Baseline snapshot captured.',flush=True)
-    cmd_base=['bash',str(skill/'precheck.sh'),PRINCIPAL,'--from-file',str(keytab),'-n',NS]
+    cmd_base=[sys.executable,str(skill/'precheck.py'),PRINCIPAL,'--from-file',str(keytab),'-n',NS]
     rc,out,err=run(cmd_base,repo,env)
     record(folder/'precheck.txt',out+'\n'+err)
     kvno=re.search(r'(?m)^\s*expected_kvno=(\d+)\s*$',out)
@@ -144,9 +144,9 @@ def main():
         if rc or not report['copilot']['result_seen'] or forbidden:
             finish('Copilot execution incomplete or used unexpected tools. No rotation attempted')
         print('Copilot plan recorded. Review copilot.jsonl privately as needed.',flush=True)
-    # The only mutating command will be the skill's existing rotate.sh wrapper.
+    # The only mutating command will be the skill's existing rotate.py wrapper.
     # Do not infer approval from the user's earlier prompt or model output.
-    display=f'bash .claude/skills/{SKILL}/scripts/rotate.sh {PRINCIPAL} --from-file {rel} -n {NS} --confirmed'
+    display=f'python3 .claude/skills/{SKILL}/scripts/rotate.py {PRINCIPAL} --from-file {rel} -n {NS} --confirmed'
     print('\nEXACT COMMAND TO BE RUN (mutates Secret and restarts the shared Tenant DaemonSet):')
     print(display)
     print('This affects the demo Tenant and may temporarily interrupt other Principals.')
@@ -161,7 +161,7 @@ def main():
     report['approval_granted']=True
     report['approved_command']=display
     print('Approval recorded. Executing the one approved rotation...',flush=True)
-    rotate=['bash',str(skill/'rotate.sh'),PRINCIPAL,'--from-file',str(keytab),'-n',NS,'--confirmed']
+    rotate=[sys.executable,str(skill/'rotate.py'),PRINCIPAL,'--from-file',str(keytab),'-n',NS,'--confirmed']
     rc,out,err=run(rotate,repo,env,timeout=210)
     record(folder/'rotation.txt',out+'\n'+err)
     report['rotation_exit_code']=rc
@@ -173,7 +173,7 @@ def main():
         finish('Rotation command did not produce started_at. Check rotation.txt and cluster state')
     print('Rotation command finished with exit code',rc,flush=True)
     # Agent-facing read-only verifier, even after rotation error/timeout.
-    agent_check=['bash',str(skill/'verify.sh'),PRINCIPAL,'--since',started,'--expect-kvno',expected,'-n',NS]
+    agent_check=[sys.executable,str(skill/'verify.py'),PRINCIPAL,'--since',started,'--expect-kvno',expected,'-n',NS]
     vr,vout,verr=run(agent_check,repo,env,timeout=110)
     record(folder/'skill-verification.txt',vout+'\n'+verr)
     report['skill_verification_exit_code']=vr

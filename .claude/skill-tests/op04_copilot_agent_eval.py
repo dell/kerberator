@@ -36,9 +36,9 @@ APPROVAL = 'APPROVE OP04 uid-2001 KVNO 7'
 
 # Keep exact commands immutable per test, to simplify audit. The Copilot shell
 # command matcher is not a complete execution sandbox; user supervision remains mandatory.
-PRECHECK = f'bash {SKILL_REL}/scripts/precheck.sh {CR} --from-file {KEYTAB_REL} -n {NS}'
-ROTATE = f'bash {SKILL_REL}/scripts/rotate.sh {CR} --from-file {KEYTAB_REL} -n {NS} --confirmed'
-VERIFY_PREFIX = f'bash {SKILL_REL}/scripts/verify.sh {CR} --since '
+PRECHECK = f'python3 {SKILL_REL}/scripts/precheck.py {CR} --from-file {KEYTAB_REL} -n {NS}'
+ROTATE = f'python3 {SKILL_REL}/scripts/rotate.py {CR} --from-file {KEYTAB_REL} -n {NS} --confirmed'
+VERIFY_PREFIX = f'python3 {SKILL_REL}/scripts/verify.py {CR} --since '
 
 
 def fail(message: str, code: int = 2):
@@ -199,7 +199,7 @@ def plan(args):
     recovery=next((c for c in specs.get('evals',[]) if c.get('id')=='op04-rotation-recovery'),None)
     if not recovery: fail('Add the op04-rotation-recovery case to evals.json before running')
     prompt=(recovery['prompt'] + ' For this FIRST phase you must execute the skill precheck, '
-            'then STOP and show the exact rotate.sh command requesting approval. '
+            'then STOP and show the exact rotate.py command requesting approval. '
             'You are NOT authorized to rotate or modify any cluster resource yet. '
             'Do not inspect raw keytab bytes or Kubernetes Secret data. Report precheck accurately.')
     # The --allow-tool command matcher should be tested with this CLI version;
@@ -211,7 +211,7 @@ def plan(args):
     '--name', folder.name,
     '--available-tools', 'view,skill,bash',
     '--allow-tool',
-    f'shell(bash {SKILL_REL}/scripts/precheck.sh:*)',
+    f'shell(python3 {SKILL_REL}/scripts/precheck.py:*)',
     '--deny-tool', 'write'
     ]
 
@@ -301,7 +301,7 @@ def execute(args):
             'You must execute that command YOURSELF now, exactly once, using the '
             'supported OP-04 skill. Do not patch Secrets or restart daemonsets '
             'directly. Capture started_at from its output. Then execute the skill '
-            'verify.sh with --since started_at --expect-kvno 7 -n kerberator-project. '
+            'verify.py with --since started_at --expect-kvno 7 -n kerberator-project. '
             'If rotation times out, do not retry; still verify and report the failure. '
             'Do not print keytab contents or credentials. State confirmed facts separately.')
     # Permission matching is best-effort, not a hard sandbox. This is a
@@ -309,7 +309,7 @@ def execute(args):
     argv=['copilot','--resume='+session,'-p',prompt,'--output-format','json',
           '--available-tools','view,skill,bash',
           '--allow-tool',f'shell({ROTATE})',
-          '--allow-tool',f'shell(bash {SKILL_REL}/scripts/verify.sh)',
+          '--allow-tool',f'shell(python3 {SKILL_REL}/scripts/verify.py)',
           '--deny-tool','write']
     print('Resuming Copilot session; agent will execute the approved command.',flush=True)
     rc,out,err=command(argv,cwd=folder/'workspace',timeout=340)
@@ -336,7 +336,7 @@ def execute(args):
     sr,so,se=command(check_argv,timeout=120)
     try: system=json.loads(so)
     except ValueError: system={'system_verdict':'INCONCLUSIVE','error':'unparseable independent verifier output'}
-    verify_base=['bash',str(SKILL_REL/'scripts/verify.sh'),CR,'--since']
+    verify_base=['python3',str(SKILL_REL/'scripts/verify.py'),CR,'--since']
     verified_calls=[]
     for c in shells:
         argv_cmd=normalize(c['command'])

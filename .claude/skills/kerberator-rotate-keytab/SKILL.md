@@ -28,11 +28,11 @@ If any input is missing or ambiguous, ask before running anything.
 
 ## Workflow
 
-Run scripts from this skill's base directory: `bash <skill-dir>/scripts/<name>.sh`.
+Run scripts from this skill's base directory: `python3 <skill-dir>/scripts/<name>.py` (Python 3.8+, standard library only).
 
 **1. Precheck (read-only).**
 ```bash
-precheck.sh <principal> --from-file <path> [-n <ns>]
+precheck.py <principal> --from-file <path> [-n <ns>]
 ```
 Checks permissions, the Principal and its keytab Secret, the daemon
 DaemonSet, and the new keytab file (principal name and KVNO, via
@@ -55,14 +55,14 @@ approval.
 
 **3. Rotate (mutating).**
 ```bash
-rotate.sh <principal> --from-file <path> [-n <ns>] --confirmed
+rotate.py <principal> --from-file <path> [-n <ns>] --confirmed
 ```
 Only add `--confirmed` after the user approved this exact command. Note
 the `started_at=` line; step 4 needs it.
 
 **4. Verify (read-only).** Run this even if step 3 reported success:
 ```bash
-verify.sh <principal> --since <started_at> --expect-kvno <expected_kvno> [-n <ns>]
+verify.py <principal> --since <started_at> --expect-kvno <expected_kvno> [-n <ns>]
 ```
 Omit `--expect-kvno` if precheck printed `expected_kvno=unknown`.
 `RESULT: VERIFIED` requires all of: every node `Minted` after
@@ -70,7 +70,7 @@ Omit `--expect-kvno` if precheck printed `expected_kvno=unknown`.
 `KerberosMintFailed` events for the UID since `started_at`.
 
 If it is `NOT VERIFIED` only because the KVNO has not updated yet, wait
-about 30 seconds and run `verify.sh` once more. Do not loop beyond that.
+about 30 seconds and run `verify.py` once more. Do not loop beyond that.
 
 ## Reporting the outcome
 
@@ -90,7 +90,7 @@ End with a short report in two parts, and keep them separate:
 | `principal ... not found` | Wrong name or namespace | Run `kubectl krb list` and ask which Principal was meant. |
 | `has no keytabSecretRef` | Nothing to rotate | Stop; report it. |
 | `Forbidden` / precheck `cannot ...` | Account lacks permission | Stop; name the missing permission. Do not try other commands to get around it. |
-| `timed out waiting for re-mint (still: X/Y minted)` | Rotation applied, some nodes did not re-mint | Do not re-run rotate. Run `verify.sh`, then `kubectl krb describe principal <name>` and `kubectl krb events --uid <uid>`, and report the failing nodes and their messages. |
+| `timed out waiting for re-mint (still: X/Y minted)` | Rotation applied, some nodes did not re-mint | Do not re-run rotate. Run `verify.py`, then `kubectl krb describe principal <name>` and `kubectl krb events --uid <uid>`, and report the failing nodes and their messages. |
 | `KerberosMintFailed` with `Password incorrect while getting initial credentials` or `Preauthentication failed` | The KDC rejected the key: the file is older than the KDC's current key (KVNO mismatch) | Report the evidence and ask for a fresh export from the KDC; rotating that fresh file fixes it. Diagnosing further is `kerberator-diagnose-auth-failure` (DG-02). |
 | `KerberosMintFailed` with `KDC unreachable` / `Cannot contact any KDC` | Network or KDC problem, not the keytab | Report it; do not rotate again. |
 | verify: KVNO 0 | Operator cannot parse the Secret | Report it; the uploaded file is probably not a keytab. |

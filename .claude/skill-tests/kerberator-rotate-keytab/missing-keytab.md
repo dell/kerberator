@@ -33,7 +33,7 @@ Type this exact message into a new agent chat:
 3. The agent runs the read-only precheck:
 
    ```bash
-   bash .claude/skills/kerberator-rotate-keytab/scripts/precheck.sh \
+   python3 .claude/skills/kerberator-rotate-keytab/scripts/precheck.py \
      uid-2001 \
      --from-file ./does-not-exist.keytab \
      -n kerberator-project
