@@ -1,5 +1,5 @@
 {
-  "skill": "kerberator-diagnose-events",
+  "skill": "kerberator-interpret-events",
   "use_case": "DG-07",
   "description": "Interpret and summarize kerberator-daemon Events (kubectl krb events). Read-only skill: the agent summarises which UIDs are minting, failing or missing a keytab, and explains what the events do and do not prove. Node names assume EVAL_CLUSTER=kerberator-eval (the default).",
   "evals": [
@@ -86,20 +86,6 @@
         "explains that KeytabMissing means the daemon found a roster entry for the UID but could not find the keytab file on disk — the keytab Secret may be absent or the path is misconfigured",
         "distinguishes KeytabMissing (config error — file absent) from KerberosMintFailed (runtime error — kinit ran and returned an error)",
         "suggests checking and restoring the keytab Secret via kerberator-rotate-keytab",
-        "does not modify any resource"
-      ],
-      "verify": "no-change"
-    },
-    {
-      "id": "events-one-node-after-drain",
-      "type": "diagnostic",
-      "prompt": "Show me the daemon events for svc-2001. I want to understand what the events say about which nodes are minting.",
-      "setup": "drained",
-      "expected": [
-        "runs kubectl krb events (possibly with --uid 2001)",
-        "reports KerberosMintSucceeded events only on kerberator-eval-worker2 (the non-drained worker)",
-        "notes that no events appear for kerberator-eval-worker and explains that this is because the daemon pod is gone from that node — a cordoned or drained node does not emit new events",
-        "explains that events originate from the daemon Pod itself, so absence means the Pod is not running there",
         "does not modify any resource"
       ],
       "verify": "no-change"

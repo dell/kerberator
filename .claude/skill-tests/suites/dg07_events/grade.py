@@ -15,8 +15,8 @@ Usage:
   python3 grade.py --trace <agent.jsonl> --case <case-id>
   python3 grade.py --trace <agent.jsonl> --case <case-id> --report <out.json>
 
-Exit: 0 PASS (all automated checks pass + human review done and passed),
-      1 FAIL, 2 INCONCLUSIVE.
+Exit: 1 FAIL (any automated check failed),
+      2 INCONCLUSIVE (automated checks passed; full PASS requires human review).
 """
 from __future__ import annotations
 
@@ -32,8 +32,13 @@ EVALS_JSON = SUITE_DIR / "evals.json"
 _LINE_CONTINUATION = re.compile(r"\\\n\s*")
 
 # Patterns that indicate a mutating command (should never appear for DG-07).
+# _KCT matches kubectl followed only by global flags (--flag, --flag=val, -f val)
+# before the verb, so read-only forms like "kubectl rollout status",
+# "kubectl auth can-i delete" and "kubectl get events | grep create" don't match.
+_KCT = r"\bkubectl\b(?:\s+--?[\w-]+(?:=\S+|\s+\S+)?)*\s+"
 MUTATING = re.compile(
-    r"\bkubectl\b[^\n]*\b(?:apply|patch|edit|delete|create|replace|rollout)\b"
+    _KCT + r"(?:apply|patch|edit|delete|create|replace)\b"
+    r"|" + _KCT + r"rollout\s+restart\b"
     r"|\bkubectl(?:-krb|\s+krb)\s+(?:drain-node|rotate-keytab|register|remove|enable|disable)\b",
     re.I,
 )

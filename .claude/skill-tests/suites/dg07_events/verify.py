@@ -16,7 +16,8 @@ import pathlib
 import sys
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parent
-EVALS_DIR = SUITE_DIR.parents[1]
+SKILL_TESTS_DIR = SUITE_DIR.parents[1]    # .../skill-tests/
+EVALS_DIR = SKILL_TESTS_DIR / "evals"    # .../skill-tests/evals/ (from PR #33)
 LIB_DIR = EVALS_DIR / "lib"
 
 sys.path.insert(0, str(LIB_DIR))

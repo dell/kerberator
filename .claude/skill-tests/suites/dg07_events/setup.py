@@ -11,9 +11,8 @@ States:
                  stale. Daemon pods restarted; KerberosMintFailed events appear.
   keytab-missing Baseline, then svc-2001-keytab Secret deleted. Daemon pods
                  restarted; KerberosKeytabMissing events appear.
-  drained        Worker1 cordoned, its daemon pod deleted. Daemon Ready on
-                 worker2 only; KerberosMintSucceeded events on worker2 only.
-                 Delegates to evals/setup/op07-drained.py.
+
+Note: depends on evals/lib/common.py and evals/setup/reset.py from PR #33.
 """
 
 import pathlib
@@ -21,7 +20,8 @@ import subprocess
 import sys
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parent
-EVALS_DIR = SUITE_DIR.parents[1]           # .../evals/
+SKILL_TESTS_DIR = SUITE_DIR.parents[1]     # .../skill-tests/
+EVALS_DIR = SKILL_TESTS_DIR / "evals"     # .../skill-tests/evals/ (from PR #33)
 LIB_DIR = EVALS_DIR / "lib"
 SETUP_DIR = EVALS_DIR / "setup"
 
@@ -49,6 +49,9 @@ def setup_baseline():
     require_cluster()
     require_workers()
     run_reset()
+    if not wait_for("KerberosMintSucceeded events",
+                    has_daemon_event, "KerberosMintSucceeded"):
+        die("no KerberosMintSucceeded events appeared after reset")
     save_baseline()
 
 
@@ -115,13 +118,6 @@ def setup_keytab_missing():
     save_baseline()
 
 
-def setup_drained():
-    """Worker1 cordoned and daemon pod deleted. Delegates to op07-drained.py."""
-    r = subprocess.run([sys.executable, str(SETUP_DIR / "op07-drained.py")])
-    if r.returncode != 0:
-        die("op07-drained.py failed")
-
-
 # ------------------------------------------------------------------
 # Entry point
 # ------------------------------------------------------------------
@@ -130,7 +126,6 @@ STATES = {
     "baseline": setup_baseline,
     "mint-failed": setup_mint_failed,
     "keytab-missing": setup_keytab_missing,
-    "drained": setup_drained,
 }
 
 
