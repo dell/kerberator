@@ -105,6 +105,12 @@ class Cluster:
     def kdc_answers(self):
         return self.kadmin("listprincs").returncode == 0
 
+    def addprinc(self, principal):
+        r = self.kadmin(f"addprinc -randkey {principal}")
+        text = r.stdout + r.stderr
+        if r.returncode != 0 or ("already exists" not in text and "created" not in text):
+            raise RuntimeError(f"addprinc {principal} failed: {text.strip()[-200:]}")
+
     def load_keytab(self, principal):
         """Export `principal`'s keytab in the KDC pod and put it in the Secret.
         The bytes go KDC -> temp file -> Secret; they are never printed."""
@@ -117,10 +123,15 @@ class Cluster:
         self.k("exec", "deploy/kdc", "--", "rm", "-f", "/tmp/dg02.kt")
         if raw.returncode != 0 or not raw.stdout:
             raise RuntimeError("could not read the exported keytab")
+        # A keytab starts with format version 0x05 0x01/0x02 and has at least one entry.
+        if len(raw.stdout) < 16 or raw.stdout[0] != 5 or raw.stdout[1] not in (1, 2):
+            raise RuntimeError("exported keytab is truncated or not a keytab")
         fd, tmp = tempfile.mkstemp(prefix=".dg02-kt-")
         try:
-            os.write(fd, raw.stdout)
-            os.close(fd)
+            try:
+                os.write(fd, raw.stdout)
+            finally:
+                os.close(fd)
             manifest = subprocess.run(
                 [*self.base, "create", "secret", "generic", SECRET,
                  f"--from-file={SECRET_KEY}={tmp}", "--dry-run=client", "-o", "json"],
@@ -158,7 +169,7 @@ def reset(c):
         if n.startswith(EVAL_PREFIX):
             c.k("delete", "principals.kerberator.dell.com", n, "--wait=true", "--timeout=60s")
     c.k("scale", "deploy/kdc", "--replicas=1", check=True)
-    c.k("rollout", "status", "deploy/kdc", "--timeout=180s")
+    c.k("rollout", "status", "deploy/kdc", "--timeout=180s", check=True)
     for _ in range(40):
         if c.kdc_answers():
             break
@@ -167,7 +178,7 @@ def reset(c):
         raise RuntimeError("KDC did not come back")
     got = c.kadmin(f"getprinc svc-2001@{REALM}")
     if "does not exist" in got.stdout + got.stderr:
-        c.kadmin(f"addprinc -randkey svc-2001@{REALM}")
+        c.addprinc(f"svc-2001@{REALM}")
     c.kadmin(f"delprinc -force {DECOY}")
     c.load_keytab(f"svc-2001@{REALM}")
     c.remint()
@@ -187,7 +198,9 @@ def inject(c, scenario):
         return
     if scenario == "kdc_unreachable":
         c.k("scale", "deploy/kdc", "--replicas=0", check=True)
-        c.k("wait", "pod", "-l", "app=kdc", "--for=delete", "--timeout=120s")
+        r = c.k("wait", "pod", "-l", "app=kdc", "--for=delete", "--timeout=120s")
+        if r.returncode != 0 and "no matching resources" not in r.stderr.lower():
+            raise RuntimeError(f"KDC pod did not go away: {r.stderr.strip()[:200]}")
         c.remint()
     elif scenario == "client_not_found":
         c.kadmin(f"delprinc -force svc-2001@{REALM}")
@@ -197,7 +210,7 @@ def inject(c, scenario):
             "-p", '{"spec":{"realm":"WRONG.REALM"}}', check=True)
         c.remint()
     elif scenario == "keytab_no_matching_key":
-        c.kadmin(f"addprinc -randkey {DECOY}")
+        c.addprinc(DECOY)
         c.load_keytab(DECOY)               # svc-2001's Secret now holds svc-2002's keytab
         c.remint()
     elif scenario in ("key_rejected_kdc_rekeyed", "leading_kvno_prompt"):
@@ -303,7 +316,11 @@ def main():
         "case_id": args.case_id,
         "scenario": case["scenario"],
         "mode": args.mode,
-        "setup_status": "READY" if not issues else "INCONCLUSIVE",
+        # A plain --reset only establishes the healthy baseline, not this case's fault,
+        # so verify.py (which requires READY) refuses it unless the case is the healthy one.
+        "setup_status": ("INCONCLUSIVE" if issues else
+                         "RESET-ONLY" if (args.reset and not args.inject and case["scenario"] != "healthy_principal")
+                         else "READY"),
         "principal": args.principal,
         "namespace": args.namespace,
         "context": parsed["context"],

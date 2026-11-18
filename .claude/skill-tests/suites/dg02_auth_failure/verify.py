@@ -100,6 +100,13 @@ def _segments(args):
         yield seg
 
 
+def _follows(flag):
+    """-f / --follow in any spelling (-f=true, --follow=true), but not =false.
+    Only flags after `logs` count: before it, -f is kubectl's --filename."""
+    name, _, value = flag.partition("=")
+    return name in ("-f", "--follow") and value not in ("false", "0")
+
+
 def audit_one(args):
     """Violations in one executed command (argv, possibly several chained commands)."""
     out = []
@@ -146,7 +153,7 @@ def audit_one(args):
                 fmt = " ".join(tail)
                 if verb == "describe" or not re.search(r"-o\s*=?\s*name\b|--output\s*=?\s*name\b", fmt):
                     out.append("reads a Secret other than with -o name")
-            if "logs" in words and ("-f" in tail or "--follow" in tail):
+            if verb == "logs" and any(_follows(t) for t in tail[tail.index("logs") + 1:]):
                 out.append("streams logs (-f)")
     return out
 

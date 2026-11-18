@@ -221,10 +221,10 @@ def main(argv=None):
         store_private(template_path, make_review(case))
 
     failures = objective_errors + semantic["failures"]
+    unknowns = []
     if verification_status == "FAIL" or audit_status == "FAIL":
         failures.extend(ver_notes)
-    unknowns = []
-    if verification_status != "PASS" or audit_status != "PASS":
+    elif verification_status != "PASS" or audit_status != "PASS":
         unknowns.extend(ver_notes)
     if semantic["status"] == "INCONCLUSIVE":
         unknowns.append(f"{len(semantic['unreviewed'])} semantic checklist requirements remain unreviewed")
