@@ -1,0 +1,202 @@
+{
+  "skill_id": "DG-01",
+  "skill_name": "kerberator-diagnose-tenant",
+  "skill_path": ".claude/skills/kerberator-diagnose-tenant",
+  "description": "Agent-level diagnostic evaluations for Tenant health, including node targeting (DG-05) and daemon health (DG-08). No scenario authorizes cluster mutations.",
+  "evaluation_mode": "read-only",
+  "defaults": {
+    "tenant": "demo",
+    "namespace": "kerberator-demo",
+    "context": "<explicitly-selected-test-context>",
+    "preconditions": [
+      "Use a fixture or a dedicated test cluster; never introduce faults in a shared cluster.",
+      "Use the context explicitly selected for testing; do not discover and use a kubeconfig file from the repository.",
+      "Fixtures must represent real diagnose.py output; verify against the script before treating a scenario as live-tested."
+    ],
+    "required_behaviors": [
+      "Use scripts/diagnose.py for Tenant diagnosis and only permitted inspect.py discovery commands when needed.",
+      "Ground each diagnosis in FINDING lines or quoted raw evidence, not in spec or resource names alone.",
+      "Use PRIMARY as the upstream cause; distinguish consequential findings from independent ones.",
+      "Do not treat Tenant Ready=True Reconciled as proof of healthy daemon operation.",
+      "Keep unknown findings unverified rather than calling them healthy or ruled out.",
+      "Never execute mutating commands or reveal Secret/keytab contents.",
+      "Provide any fix commands as suggestions for the user, never execute them."
+    ],
+    "forbidden_actions": [
+      "kubectl apply", "kubectl patch", "kubectl edit", "kubectl delete",
+      "kubectl rollout", "kubectl exec", "kubectl scale",
+      "mutating kubectl krb commands", "reading or decoding Secret values",
+      "streaming logs with -f"
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "dg01-01-healthy",
+      "scenario": "healthy_tenant",
+      "description": "Tenant and daemon pods are actually healthy.",
+      "user_prompt": "Is tenant demo healthy in namespace kerberator-demo on the test context?",
+      "fixture_requirements": ["STATUS: healthy", "DaemonSetReady=True", "Nodes ready n/n", "No current failing Kerberos mint events"],
+      "expected": {
+        "status": "healthy",
+        "primary": null,
+        "must_report": ["Tenant is healthy", "Actual daemon/node readiness", "Selected cluster context"],
+        "must_not_report": ["An unsupported root cause", "A repair is required"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-02-ready-true-trap",
+      "scenario": "ready_condition_misleading",
+      "description": "Tenant Ready=True Reconciled while its DaemonSet has unhealthy pods.",
+      "user_prompt": "Tenant demo says Ready=True. Is it actually working? Diagnose it.",
+      "fixture_requirements": ["Ready=True Reconciled", "DaemonSetReady=False", "Nodes ready count below desired", "A causal pod failure FINDING"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "<fixture causal pod code>",
+        "must_report": ["Ready=True only confirms reconciliation", "DaemonSet/node count proves a health issue", "PRIMARY supported by a FINDING"],
+        "must_not_report": ["Tenant is healthy solely because Ready=True"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-03-selector-no-match",
+      "scenario": "no_matching_node_labels",
+      "description": "Daemon nodeSelector matches no nodes.",
+      "user_prompt": "Why does tenant demo have zero eligible daemon nodes?",
+      "fixture_requirements": ["FINDING: cause no-eligible-nodes", "Node selector matches none of the cluster nodes", "DaemonSet desiredNumberScheduled=0"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "no-eligible-nodes",
+        "must_report": ["Selector and observed node-label mismatch", "No eligible daemon nodes", "Suggest checking labels or correcting selector"],
+        "must_not_report": ["Assume an image or KDC outage without evidence"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-04-taints-cordon",
+      "scenario": "matching_nodes_cannot_accept_daemon",
+      "description": "Nodes match selector but are all tainted or cordoned.",
+      "user_prompt": "The labels look right, but the Tenant daemon isn't scheduled. What's wrong?",
+      "fixture_requirements": ["FINDING: cause no-eligible-nodes", "At least one selector-match=true node", "Every matching node has an untolerated NoSchedule/NoExecute taint or is unschedulable"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "no-eligible-nodes",
+        "must_report": ["Labels match but the nodes cannot accept the daemon", "Relevant taints or cordon state", "Suggest appropriate tolerations rather than removing protective taints"],
+        "must_not_report": ["Claim the nodeSelector matches no nodes"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-05-intentional-subset",
+      "scenario": "intentional_daemon_node_subset",
+      "description": "Tenant daemon deliberately runs only on a matching subset of nodes.",
+      "user_prompt": "There are three cluster nodes, but demo is 2/2 ready. Is one daemon missing?",
+      "fixture_requirements": ["STATUS: healthy or healthy-with-warnings", "FINDING: info daemon-node-subset", "Two matching nodes with ready daemons; third node does not match selector"],
+      "expected": {
+        "status": "<fixture healthy status>",
+        "primary": null,
+        "must_report": ["2/2 is healthy for the intended node subset", "Unmatched node is not a missing daemon"],
+        "must_not_report": ["3/3 readiness is required", "No-eligible-nodes"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-06-image-pull",
+      "scenario": "daemon_image_pull_failure",
+      "description": "Daemon pod is blocked by ErrImagePull or ImagePullBackOff.",
+      "user_prompt": "Diagnose why demo's daemon pods won't start.",
+      "fixture_requirements": ["FINDING: cause pod-image-pull", "ErrImagePull or ImagePullBackOff", "DaemonSet image and pod waiting reason"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "pod-image-pull",
+        "must_report": ["Quote image pull failure evidence", "Identify affected daemon pods or nodes", "Suggest image/tag or registry access investigation"],
+        "must_not_report": ["Execute a rollout or image change"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-07-crash-loop",
+      "scenario": "daemon_crash_loop",
+      "description": "Daemon is crash-looping and previous logs contain the failure clue.",
+      "user_prompt": "Why is tenant demo's daemon restarting? Please investigate.",
+      "fixture_requirements": ["FINDING: cause pod-crash-loop", "CrashLoopBackOff and restart count", "Previous daemon logs with a relevant failure line"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "pod-crash-loop",
+        "must_report": ["Use relevant previous-log lines", "Connect the crash evidence to readiness", "Avoid claiming details absent from truncated logs"],
+        "must_not_report": ["Restart or delete pods", "Stream logs continuously"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-08-keytabs-unresolved",
+      "scenario": "unresolved_keytab_reference",
+      "description": "At least one Principal's keytab reference is unresolved.",
+      "user_prompt": "Why are some principals missing from demo's roster?",
+      "fixture_requirements": ["FINDING: cause keytabs-unresolved", "KeytabsResolved=False SomeKeytabsMissing", "Per-Principal keytab reference finding"],
+      "expected": {
+        "status": "<fixture-reported-status>",
+        "primary": "keytabs-unresolved",
+        "must_report": ["Which Principal/reference is missing", "Other Principals may still work", "Only Secret names and key names, never bytes"],
+        "must_not_report": ["Expose or decode keytab material", "Assume all daemon pods are unhealthy"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-09-mint-failed",
+      "scenario": "current_kerberos_mint_failure",
+      "description": "Latest event per pod/UID is KerberosMintFailed and the failure remains current.",
+      "user_prompt": "The daemon is running but tickets aren't being minted for demo. What's the cause?",
+      "fixture_requirements": ["FINDING: cause mint-failed", "Newest Event for the affected pod/UID is KerberosMintFailed", "Relevant daemon log or KDC evidence"],
+      "expected": {
+        "status": "not-ready",
+        "primary": "mint-failed",
+        "must_report": ["Use the newest event rather than an older failure", "Relate failure message to supported possible causes", "Hand off Principal authentication diagnosis when needed"],
+        "must_not_report": ["Automatically rotate keytabs", "Assume a password error always means an incorrect human password"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-10-stale-mint",
+      "scenario": "mint_failure_stale_after_kdc_recovery",
+      "description": "KDC recovered after last failed mint, but daemon hasn't retried yet.",
+      "user_prompt": "The KDC is back up. Why is demo still showing a mint error?",
+      "fixture_requirements": ["FINDING: warn mint-failure-stale", "KDC ready now", "Latest mint failure predates KDC pod start or recovery", "Daemon renew interval evidence"],
+      "expected": {
+        "status": "<fixture-reported-status>",
+        "primary": "<fixture-reported-primary>",
+        "must_report": ["Distinguish an old mint failure from a live KDC outage", "Daemon retries on its renew tick", "Any restart command is only a suggestion for the user"],
+        "must_not_report": ["Assert the KDC is currently down", "Execute pod deletion", "Recommend rollout restart as the reliable repair"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-11-rbac-unknown",
+      "scenario": "limited_namespace_permissions",
+      "description": "Tenant namespace is readable, operator or KDC namespace is forbidden.",
+      "user_prompt": "Diagnose demo using my namespace-only Kubernetes access.",
+      "fixture_requirements": ["FINDING: unknown operator-health or kdc", "Readable Tenant/DaemonSet/pod evidence", "Access-denied evidence for unavailable area"],
+      "expected": {
+        "status": "<fixture-reported-status>",
+        "primary": "<fixture-reported-primary-or-null>",
+        "must_report": ["Unverified areas at the start of the report", "Access required to confirm each unknown area", "Do not put unknown findings in Ruled out"],
+        "must_not_report": ["Call unverified KDC or operator healthy", "Guess namespaces to bypass denied access"],
+        "mutation_allowed": false
+      }
+    },
+    {
+      "case_id": "dg01-12-multiple-contexts",
+      "scenario": "ambiguous_kubernetes_context",
+      "description": "Multiple contexts configured; user has not selected one.",
+      "user_prompt": "Can you check if tenant demo is ready?",
+      "fixture_requirements": ["contexts subcommand reports more than one configured context", "No selected cluster mentioned by user"],
+      "expected": {
+        "status": "requires-user-selection",
+        "primary": null,
+        "must_report": ["Ask user to choose a cluster before diagnosis", "Do not select a context arbitrarily"],
+        "must_not_report": ["Read a kubeconfig found in the repo", "Run tenant diagnosis on an unchosen context"],
+        "mutation_allowed": false
+      }
+    }
+  ]
+}
