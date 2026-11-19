@@ -1,0 +1,98 @@
+COLLECTED: 2026-11-18T00:30:29Z
+CONTEXT:   kind-kerberator
+
+== 1. Principal svc-2001 ==
+  uid:              2001
+  kerberos name:    svc-2001@EXAMPLE.COM   (realm: EXAMPLE.COM)
+  namespace:        kerberator-demo
+  tenant:           demo
+  disabled:         true  (reason: dg02 evaluation)
+  keytab secret:    svc-2001-keytab (key: svc-2001.keytab)   exists: present   (contents never read)
+  KVNO in secret:   10   observed: 2026-11-18T00:30:28Z
+  enctypes:         aes128-cts-hmac-sha1-96, aes256-cts-hmac-sha1-96
+  node selector:    <none: every node the Tenant serves>
+  conditions:
+    Ready=Unknown  Disabled: principal is disabled (dg02 evaluation)
+
+== 2. Tenant demo (realm and KDC configuration) ==
+  realm:            EXAMPLE.COM
+  disabled:         false
+  renew interval:   30 (default) minutes
+  ticket cache dir: /tmp (default) on each node, file krb5cc_<uid>
+  daemon nodes:     <all nodes>
+  conditions:
+    RosterConsistent=True  AllUIDsUnique: 
+    KeytabsResolved=True  AllKeytabsResolved: 
+    DaemonSetReady=False  SomePodsNotReady: 0/1 ready
+    Ready=True  Reconciled: 
+  krb5.conf (realm and KDC lines only):
+      default_realm = EXAMPLE.COM
+      dns_lookup_kdc = false
+      dns_lookup_realm = false
+      EXAMPLE.COM = {
+        kdc = kdc.kerberator-demo.svc.cluster.local:88
+
+== 3. Per-node status (as the operator reports it) ==
+  expected eligible nodes: 1   (status.tenant.desiredNodes; ready 0)
+  NODE         READY  REASON       LAST-OBSERVED          AGE      MESSAGE
+  kerberator-control-plane false  Phase=Succeeded 2026-11-18T00:30:29Z   0m       
+
+== 4. Daemon pods for tenant demo ==
+  POD                                NODE       PHASE     READY  RESTARTS
+  demo-kerberator-daemon-4ghcb       kerberator-control-plane Succeeded false  0
+      [2026-11-18T00:30:28Z] Normal Killing: Stopping container kerberator-daemon
+      [2026-11-18T00:29:48Z] Normal KerberosMintSucceeded: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+      [2026-11-18T00:29:27Z] Normal Scheduled: Successfully assigned kerberator-demo/demo-kerberator-daemon-4ghcb to kerberator-control-plane
+      [2026-11-18T00:29:27Z] Normal Pulled: Container image "ghcr.io/dell/kerberator-daemon:v0.10.0" already present on machine and can be accessed by the pod
+      [2026-11-18T00:29:27Z] Normal Created: Container created
+  demo-kerberator-daemon-wcfxp       kerberator-control-plane Pending   false  0
+      [2026-11-18T00:30:29Z] Normal Scheduled: Successfully assigned kerberator-demo/demo-kerberator-daemon-wcfxp to kerberator-control-plane
+
+== 5. Kerberos events for uid 2001 (newest first, full messages) ==
+  [2026-11-18T00:29:48Z] KerberosMintSucceeded on demo-kerberator-daemon-4ghcb (x1)  [before current keytab]: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+  [2026-11-18T00:29:00Z] KerberosMintFailed on demo-kerberator-daemon-tn7jx (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Password incorrect while getting initial credentials )
+  [2026-11-18T00:28:44Z] KerberosMintFailed on demo-kerberator-daemon-thp8l (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Password incorrect while getting initial credentials )
+  [2026-11-18T00:28:30Z] KerberosMintFailed on demo-kerberator-daemon-hclmd (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Keytab contains no suitable keys for svc-2001@EXAMPLE.COM while getting initial credentials )
+  [2026-11-18T00:27:58Z] KerberosMintSucceeded on demo-kerberator-daemon-dlg89 (x1)  [before current keytab]: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+  [2026-11-18T00:27:42Z] KerberosMintSucceeded on demo-kerberator-daemon-7r5dl (x1)  [before current keytab]: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+  [2026-11-18T00:27:28Z] KerberosMintFailed on demo-kerberator-daemon-bvg7r (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Client 'svc-2001@EXAMPLE.COM' not found in Kerberos database while getting initial credentials )
+  [2026-11-18T00:27:08Z] KerberosMintFailed on demo-kerberator-daemon-nfcbm (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Cannot contact any KDC for realm 'EXAMPLE.COM' while getting initial credentials )
+  [2026-11-18T00:27:06Z] KerberosMintFailed on demo-kerberator-daemon-wkkv4 (x1)  [before current keytab]: kinit failed for uid=2001 principal=svc-2001@EXAMPLE.COM: kinit failed: exit status 1 (output: kinit: Cannot contact any KDC for realm 'EXAMPLE.COM' while getting initial credentials )
+  [2026-11-18T00:26:53Z] KerberosMintSucceeded on demo-kerberator-daemon-qjq2p (x1)  [before current keytab]: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+  [2026-11-18T00:14:21Z] KerberosMintSucceeded on demo-kerberator-daemon-jvhml (x3)  [before current keytab]: Minted ccache for uid=2001 principal=svc-2001@EXAMPLE.COM
+
+== 6. Daemon log lines for svc-2001@EXAMPLE.COM (last 2000 lines per pod) ==
+  demo-kerberator-daemon-4ghcb: UNAVAILABLE: error: error from server (NotFound): pods "demo-kerberator-daemon-4ghcb" not found in namespace "kerberator-demo"
+  demo-kerberator-daemon-wcfxp: UNAVAILABLE: Error from server (BadRequest): container "kerberator-daemon" in pod "demo-kerberator-daemon-wcfxp" is waiting to start: ContainerCreating
+
+== 7. All Principals in namespace kerberator-demo (their OWN mint results) ==
+  svc-2001  uid=2001  tenant=demo  Ready=Unknown  node results: Phase=Pending
+
+== 8. SIGNALS ==
+  principal_disabled=true
+  tenant_disabled=false
+  principal_ready=Unknown  (Disabled)
+  tenant_found=yes
+  keytab_secret=present
+  keytabs_resolved=True
+  duplicate_uid=no
+  roster_consistent=True
+  realm_match=yes            (principal @EXAMPLE.COM vs tenant EXAMPLE.COM)
+  kvno_observed=10
+  events_since_keytab_read=0 failed, 0 succeeded   (keytab read 2026-11-18T00:30:28Z)
+  nodes_expected=1   (eligible nodes, from status.tenant.desiredNodes)
+  nodes_minted=0/1
+  nodes_failing=0/1
+  nodes_missing_report=0/1   (expected but no status entry at all)
+  nodes_no_recent_report=0/1
+  nodes_stale_report=0/1   (older than 2 x renew interval of 30m)
+  nodes_pruned=0   (not eligible for this Principal)
+  nodes_daemon_not_ready=1/1   (no recent report; the daemon pod itself is not ready)
+  daemon_pods_ready=0/2
+  daemon_not_ready_reason=starting
+  principals_mint_failing_in_namespace=0/1
+  principals_not_ready_in_namespace=1/1
+  node_selector=none
+  ticket_cache_dir=/tmp
+  latest_event=none
+  error_signature=none
