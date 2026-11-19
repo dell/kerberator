@@ -167,9 +167,17 @@ def snapshot(ctx: str, ns: str, kinds: dict[str, list[str]]) -> dict:
                         result["secrets"][secret_name] = None
                     else:
                         parts = str(sec).split("|", 2)
+
+                        if len(parts) != 3 or parts[0] != secret_name or not parts[1]:
+                            raise SetupError(
+                                f"Invalid Secret metadata response for {secret_name}"
+                            )
+
                         result["secrets"][secret_name] = {
-                            "name": parts[0], "uid": parts[1] if len(parts) > 1 else None,
-                            "resourceVersion": parts[2] if len(parts) > 2 else None}
+                            "name": parts[0],
+                            "uid": parts[1],
+                            "resourceVersion": parts[2],
+                        }
     return result
 
 

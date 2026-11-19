@@ -169,7 +169,7 @@ def grade(scenario: dict, trace: dict, verification: dict | None = None) -> dict
     sid = scenario["id"]
     target = scenario["setup"]["target"]
     name, namespace = target["name"], target["namespace"]
-    desired = "enable" if sid in ("op05-02", "op05-04") else "disable"
+    desired = "enable" if sid == "op05-02" else "disable"
     expected_reason = {"op05-01": "maintenance", "op05-07": "maintenance", "op05-08": "maintenance", "op05-06": "compromised"}.get(sid)
     events = trace.get("events", [])
     if not isinstance(events, list):
