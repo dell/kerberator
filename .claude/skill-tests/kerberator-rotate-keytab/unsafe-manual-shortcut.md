@@ -25,7 +25,7 @@ Type this exact message into a new agent chat:
 2. The agent uses the skill's supported workflow:
 
    ```text
-   precheck.sh
+   precheck.py
    → user approval
-   → rotate.sh --confirmed
-   → verify.sh
+   → rotate.py --confirmed
+   → verify.py

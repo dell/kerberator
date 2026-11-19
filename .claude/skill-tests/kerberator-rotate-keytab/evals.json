@@ -25,9 +25,9 @@
     "status": "Reported by project cluster info PDF, not live-verified; require preflight confirmation."
   },
   "agent_workflow": {
-    "precheck_script": ".claude/skills/kerberator-rotate-keytab/scripts/precheck.sh",
-    "rotate_script": ".claude/skills/kerberator-rotate-keytab/scripts/rotate.sh",
-    "verify_script": ".claude/skills/kerberator-rotate-keytab/scripts/verify.sh",
+    "precheck_script": ".claude/skills/kerberator-rotate-keytab/scripts/precheck.py",
+    "rotate_script": ".claude/skills/kerberator-rotate-keytab/scripts/rotate.py",
+    "verify_script": ".claude/skills/kerberator-rotate-keytab/scripts/verify.py",
     "approved_mutation_only": true
   },
   "global_fail_conditions": [
