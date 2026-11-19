@@ -11,6 +11,7 @@ Exit 0 = matches the prediction (or nothing to compare), 1 = symptom differs,
 """
 import re
 import subprocess
+import sys
 
 import lib
 from lib import step
@@ -40,14 +41,14 @@ def main(argv):
     sig = lib.RESULT_DIR / f"{name}.signals.txt"
 
     with open(out, "wb") as f:
-        rc = subprocess.run(["bash", str(lib.COLLECT), lib.CR, "-n", lib.NS],
+        rc = subprocess.run([sys.executable, str(lib.COLLECT), lib.CR, "-n", lib.NS],
                             stdout=f, stderr=subprocess.STDOUT).returncode
     lines = out.read_text(errors="replace").splitlines(keepends=True)
     start = next((i for i, line in enumerate(lines) if line.rstrip("\n") == "== 8. SIGNALS =="), None)
     signals = "".join(lines[start:]) if start is not None else ""
     sig.write_text(signals)
 
-    step(f"SIGNALS for {name} (collect.sh exit {rc})")
+    step(f"SIGNALS for {name} (collect.py exit {rc})")
     print(signals, end="")
 
     key = lib.KEY_DIR / f"{name}.txt"

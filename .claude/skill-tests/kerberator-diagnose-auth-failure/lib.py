@@ -39,7 +39,7 @@ ROSTER_CM = f"{TENANT}-roster"          # the operator copies krb5Conf into this
 HERE = Path(__file__).resolve().parent
 REPO = Path(subprocess.run(["git", "-C", str(HERE), "rev-parse", "--show-toplevel"],
                            stdout=subprocess.PIPE, text=True, check=True).stdout.strip())
-COLLECT = REPO / ".claude/skills/kerberator-diagnose-auth-failure/scripts/collect.sh"
+COLLECT = REPO / ".claude/skills/kerberator-diagnose-auth-failure/scripts/collect.py"
 QUICKSTART_TENANT = REPO / "examples/quickstart/tenant.yaml"  # known-good Tenant spec
 
 # Work dir lives outside the repo so the agent under test does not stumble

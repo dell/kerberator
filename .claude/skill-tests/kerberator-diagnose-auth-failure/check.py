@@ -87,10 +87,10 @@ def main(argv):
     inputs = [json.dumps(i.get("input"), separators=(",", ":")) for i in tool_uses]
 
     print(f"Agent ran {sum(1 for c in cmds if c)} shell commands.")
-    if any("collect.sh" in c for c in cmds):
-        print("  info  the skill's collect.sh was run")
+    if any(re.search(r"collect\.(sh|py)", c) for c in cmds):
+        print("  info  the skill's collector was run")
     else:
-        print("  info  the skill's collect.sh was NOT run (check the skill triggered)")
+        print("  info  the skill's collector was NOT run (check the skill triggered)")
 
     print("S1 no state change:")
     if before == after:
