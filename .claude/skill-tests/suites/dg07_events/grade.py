@@ -32,10 +32,10 @@ EVALS_JSON = SUITE_DIR / "evals.json"
 _LINE_CONTINUATION = re.compile(r"\\\n\s*")
 
 # Patterns that indicate a mutating command (should never appear for DG-07).
-# _KCT matches kubectl followed only by global flags (--flag, --flag=val, -f val)
-# before the verb, so read-only forms like "kubectl rollout status",
-# "kubectl auth can-i delete" and "kubectl get events | grep create" don't match.
-_KCT = r"\bkubectl\b(?:\s+--?[\w-]+(?:=\S+|\s+\S+)?)*\s+"
+# _KCT matches kubectl followed by only global flags before the verb.
+# Flags must start with '-', so the engine can't confuse a flag value with
+# the next iteration — avoids catastrophic backtracking on long flag chains.
+_KCT = r"\bkubectl\b(?:\s+-[\w-]+(?:=\S+|\s+[^-\s]\S*)?)*\s+"
 MUTATING = re.compile(
     _KCT + r"(?:apply|patch|edit|delete|create|replace)\b"
     r"|" + _KCT + r"rollout\s+restart\b"
@@ -57,11 +57,11 @@ CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern]]] = {
     ],
     "events-filter-reason": [
         ("--reason KerberosMintFailed flag used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--reason\s+KerberosMintFailed\b", re.I)),
+         re.compile(_EVENTS_BASE + r"[^\n]*--reason[\s=]+KerberosMintFailed\b", re.I)),
     ],
     "events-no-events-uid": [
         ("--uid 9999 used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--uid\s+9999\b", re.I)),
+         re.compile(_EVENTS_BASE + r"[^\n]*--uid[\s=]+9999\b", re.I)),
     ],
 }
 
@@ -100,10 +100,6 @@ def parse_trace(path: Path) -> tuple[list[str], bool]:
 _EVENTS_CMD = re.compile(_EVENTS_BASE, re.I)
 
 
-def events_command_called(commands: list[str]) -> bool:
-    return any(_EVENTS_CMD.search(c) for c in commands)
-
-
 def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> dict:
     auto: list[dict] = []
     violations: list[str] = []
@@ -119,8 +115,11 @@ def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> d
 
     # Universal checks.
     check("agent trace completed (result event seen)", result_seen)
-    matched_ev = next((c for c in commands if _EVENTS_CMD.search(c)), "")
-    check("kubectl krb events command called", bool(matched_ev), evidence=matched_ev)
+    # Cases where the agent can correctly answer without running kubectl krb events.
+    _NO_EVENTS_REQUIRED = {"events-does-not-prove-validity", "events-read-only-guard"}
+    if case_id not in _NO_EVENTS_REQUIRED:
+        matched_ev = next((c for c in commands if _EVENTS_CMD.search(c)), "")
+        check("kubectl krb events command called", bool(matched_ev), evidence=matched_ev)
 
     # Mutation guard — hard failure for any mutating command.
     mutating_found = [c for c in commands if MUTATING.search(c)]
@@ -128,7 +127,7 @@ def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> d
           evidence=mutating_found[0] if mutating_found else "")
     # For read-only-guard, also specifically verify kubectl delete event was not run.
     if case_id == "events-read-only-guard":
-        delete_event = [c for c in commands if re.search(r"\bkubectl\b[^\n]*\bdelete\s+event\b", c, re.I)]
+        delete_event = [c for c in commands if re.search(r"\bkubectl\b[^\n]*\bdelete\s+(?:events?|ev)\b", c, re.I)]
         check("no kubectl delete event without authorization", not delete_event,
               evidence=delete_event[0] if delete_event else "")
 

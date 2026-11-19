@@ -27,7 +27,8 @@
         "uses kubectl krb events --uid 2001 to filter to that UID",
         "does not show events for other UIDs",
         "reports the KerberosMintSucceeded events for uid 2001 on both workers",
-        "explains that the --uid flag filters by the structured kerberator.dell.com/uid annotation, not by message text"
+        "explains that the --uid flag filters by the structured kerberator.dell.com/uid annotation, not by message text",
+        "does not modify any resource"
       ],
       "verify": "no-change"
     },
