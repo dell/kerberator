@@ -95,3 +95,9 @@ Special cases:
 - `no-eligible-nodes`: say which shape the finding names. Either no node has the labels, or the matching nodes are tainted/cordoned. For taints, the fix is a `spec.daemon.tolerations` entry, not removing the taint.
 - `principal-status-stale` (info): a Principal looks not Ready only because the operator stopped trusting its last mint Event after 5 minutes (a known issue when `renewMinutes` is unset). Say it **is** minting, the status is stale, and give the `renewMinutes` workaround; do not report a fault.
 - `principal-no-eligible-nodes`: the Tenant can be healthy while one Principal's own `spec.nodeSelector` matches no node. Name the selector and suggest checking `kubectl krb node-labels`.
+
+## Shared event interpretation reference
+
+When interpreting Kerberator Events, consult the shared
+[DG-07 event interpretation reference](../kerberator-interpret-events/references/event-interpretation.md).
+Do not duplicate event semantics or treat an event reason alone as proof of root cause.
