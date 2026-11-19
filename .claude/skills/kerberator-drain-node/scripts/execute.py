@@ -11,9 +11,18 @@ def main():
     p.add_argument("--plan",required=True)
     p.add_argument("--approve",required=True,help="Exact node name approved by user")
     a=p.parse_args()
+
     plan=load_plan(a.plan)
+
+    if plan.get("mode") not in ("drain", "uncordon"):
+        raise Stop(
+            "Not a valid OP-07 drain/uncordon plan; "
+            "for workload evacuation use evacuate.py"
+        )
+
     if plan.get("status")!="READY" or plan.get("issues"):
         raise Stop("Preflight was blocked; do not override it")
+        
     if a.approve!=plan["node"]:
         raise Stop("Approval name does not match preflight target")
     base=kubectl(plan["context"],plan["kubeconfig"])

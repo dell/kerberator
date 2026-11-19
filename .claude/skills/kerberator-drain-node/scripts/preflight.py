@@ -48,10 +48,9 @@ def main():
     plan = {"version":1,"mode":a.mode,"context":context,"kubeconfig":os.path.abspath(a.kubeconfig) if a.kubeconfig else None,
             "node":node,"baseline":state,"permissions":perms,"issues":issues,
             "effects":(["Cordons the node", "Deletes every Kerberator-labeled daemon pod on that node across namespaces", "Does NOT evict ordinary workloads", "DaemonSet pods can immediately recreate despite cordon"] if a.mode=="drain" else ["Uncordons the node only", "Does NOT restart daemons or relocate workloads"])}
-    plan["plan_id"] = checksum(plan)
     plan["status"] = "BLOCKED" if issues else "READY"
-    # status is included in the signed digest: recompute after finalizing.
-    plan["plan_id"] = checksum({k:v for k,v in plan.items() if k!="plan_id"})
+    plan["plan_id"] = checksum(plan)
+    
     if a.out:
         try:
             with open(a.out, "w", encoding="utf-8") as f:
