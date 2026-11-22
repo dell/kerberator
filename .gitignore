@@ -39,3 +39,6 @@ __pycache__/
 # Rendered release manifests (make manifests) and release-time downloads
 /dist/
 /release-assets/
+
+# macOS Finder metadata
+.DS_Store
