@@ -26,9 +26,20 @@ import sys
 import time
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from grading.results import CheckResult, inconclusive  # noqa: E402
+from harness import environment as envlib, legacy  # noqa: E402
+from harness.scenario import import_suite_file  # noqa: E402
+
 # These are read-only fixture/snapshot utilities shared with trusted setup.
-from setup import (KIND_PLURAL, MISSING, SetupError, kubectl, kubectl_json,
-                   principal_tenant, snapshot, spec_path, write_atomic)
+# Loaded by file path: a bare `import setup` breaks outside this directory.
+_setup = import_suite_file(Path(__file__).resolve().parent, "setup")
+(KIND_PLURAL, MISSING, SetupError, kubectl, kubectl_json, principal_tenant, snapshot, spec_path,
+ write_atomic) = (_setup.KIND_PLURAL, _setup.MISSING, _setup.SetupError, _setup.kubectl, _setup.kubectl_json,
+                  _setup.principal_tenant, _setup.snapshot, _setup.spec_path, _setup.write_atomic)
 
 EXPECTED_IDS = {f"op09-{i:02d}" for i in range(1, 9)}
 
@@ -268,7 +279,7 @@ def new_mint_failures(ctx: str, ns: str, after_at: datetime) -> list[dict]:
                   "No namespace KerberosMintFailed events with a post-baseline timestamp observed.")]
 
 def daemon_checks(s: dict, before: dict, after: dict, baseline_at: datetime, ctx: str, ns: str) -> list[dict]:
-    sid = s["id"]
+    sid = s["case_id"]
     if sid not in ("op09-01", "op09-02", "op09-03", "op09-04", "op09-05", "op09-07", "op09-08"):
         return []
     target = s["setup"]["target"]
@@ -352,9 +363,9 @@ def severity(verdicts: list[str]) -> str:
     return "PASS"
 
 
-def verify(a: argparse.Namespace) -> dict:
+def _verify_existing(a: argparse.Namespace) -> dict:
     suite = json.loads(Path(a.evals).read_text(encoding="utf-8"))
-    scenarios = [s for s in suite.get("scenarios", []) if s.get("id") == a.scenario]
+    scenarios = [s for s in suite.get("cases", []) if s.get("case_id") == a.scenario]
     if len(scenarios) != 1 or a.scenario not in EXPECTED_IDS:
         raise SetupError(f"Unknown or duplicate OP-09 scenario {a.scenario}")
     s = scenarios[0]
@@ -372,7 +383,7 @@ def verify(a: argparse.Namespace) -> dict:
         raise SetupError("Baseline target/context/namespace mismatch")
     if a.context and a.context != ctx:
         raise SetupError("Refusing to change context after baseline")
-    if ctx != suite["defaults"]["kube_context"] or ns != suite["defaults"]["namespace"]:
+    if ctx != (getattr(a, "approved_context", None) or suite["defaults"]["kube_context"]) or ns != suite["defaults"]["namespace"]:
         raise SetupError("Baseline points outside scenario's approved cluster context/namespace")
     old = baseline_file["baseline"]
     if not all(k in old for k in ("principals", "tenants", "daemonsets", "secret_names_exist")):
@@ -419,6 +430,37 @@ def verify(a: argparse.Namespace) -> dict:
             ]}
 
 
+# --------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# Wraps _verify_existing() above (same checks, same bounded polling); the CLI is unchanged.
+
+def verify(scenario: dict, setup_result: dict, environment: dict) -> CheckResult:
+    """SYSTEM result: independent Kubernetes state vs. the setup baseline."""
+    env = envlib.normalize(environment)
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    baseline = setup_result.get("baseline_ref")
+    if not baseline or not Path(baseline).is_file():
+        return inconclusive("baseline_missing", "setup_result.baseline_ref does not point at a baseline file")
+    suite_id = scenario.get("suite_id") or setup_result.get("suite_id")
+    out = envlib.artifact_path(env, suite_id, scenario["case_id"], "verification.json")
+    timeout = env.get("verify_timeout_seconds")
+    args = argparse.Namespace(scenario=scenario["case_id"], baseline=baseline,
+                              evals=str(Path(__file__).with_name("evals.json")),
+                              context=setup_result.get("context"), approved_context=env.get("context"),
+                              timeout=int(timeout) if timeout is not None else None,
+                              interval=5.0, output=str(out))
+    try:
+        with envlib.kube_env(env):
+            raw = _verify_existing(args)
+    except (SetupError, KeyError, ValueError, TypeError, OSError) as exc:
+        # Evaluator error, not an agent failure.
+        return inconclusive("verification_error", f"verify could not complete: {exc}")
+    result = legacy.from_checks(raw["checks"], name_key="check", status_key="verdict",
+                                reason_key="detail", evidence_refs=[str(baseline), str(out)])
+    return legacy.with_overall(result, raw.get("verdict"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--scenario", required=True)
@@ -430,7 +472,7 @@ def main() -> int:
     parser.add_argument("--interval", type=float, default=5.0, help="Polling interval, seconds")
     args = parser.parse_args()
     try:
-        result = verify(args)
+        result = _verify_existing(args)
         write_atomic(Path(args.output), result)
     except (SetupError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"OP-09 verify ERROR: {exc}", file=sys.stderr)

@@ -32,6 +32,14 @@ import subprocess
 import sys
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
+
+SUITE_ID = "op09_update_tenant_principal"
+
 KIND_PLURAL = {"Principal": "principals", "Tenant": "tenants"}
 ALLOWED_NAMES = {"op09-eval-tenant", "uid-8301", "uid-8307", "uid-8396", "uid-8397"}
 MISSING = object()
@@ -220,7 +228,7 @@ def can_i(ctx: str, ns: str, verb: str, kind: str, as_user: str) -> bool:
 
 
 def preflight(scenario: dict, snap: dict, ctx: str, ns: str, agent_as: str | None) -> list[str]:
-    sid = scenario["id"]
+    sid = scenario["case_id"]
     s = scenario["setup"]
     target = s["target"]
     kind, name = target["kind"], target["name"]
@@ -273,9 +281,9 @@ def preflight(scenario: dict, snap: dict, ctx: str, ns: str, agent_as: str | Non
     return issues
 
 
-def prepare(scenario: dict, ctx: str, ns: str, manifest_dir: Path) -> None:
+def _prepare_fixture(scenario: dict, ctx: str, ns: str, manifest_dir: Path) -> None:
     """Trusted, explicitly opted-in fixture preparation. Preflight before writes."""
-    sid, s = scenario["id"], scenario["setup"]
+    sid, s = scenario["case_id"], scenario["setup"]
     target = s["target"]
     kind, name = target["kind"], target["name"]
     safe_fixture(kind, name)
@@ -319,7 +327,7 @@ def write_atomic(path: Path, data: dict) -> None:
 def run(a: argparse.Namespace) -> dict:
     source = Path(a.evals)
     suite = json.loads(source.read_text(encoding="utf-8"))
-    matches = [s for s in suite.get("scenarios", []) if s.get("id") == a.scenario]
+    matches = [s for s in suite.get("cases", []) if s.get("case_id") == a.scenario]
     if len(matches) != 1:
         raise SetupError(f"Unknown or duplicate scenario {a.scenario!r}")
     scenario = matches[0]
@@ -335,7 +343,7 @@ def run(a: argparse.Namespace) -> dict:
     if a.apply:
         if not a.manifest_dir or not Path(a.manifest_dir).is_dir():
             raise SetupError("--apply requires --manifest-dir containing trusted, complete fixture CR manifests")
-        prepare(scenario, ctx, ns, Path(a.manifest_dir))
+        _prepare_fixture(scenario, ctx, ns, Path(a.manifest_dir))
     baseline = snapshot(ctx, ns, target)
     issues = preflight(scenario, baseline, ctx, ns, a.agent_as)
     result = {"suite_id": suite["suite_id"], "scenario_id": a.scenario,
@@ -352,6 +360,59 @@ def run(a: argparse.Namespace) -> dict:
                         "Never pass evaluator baseline or fixture definitions into agent workspace."]}
     write_atomic(Path(a.output), result)
     return result
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Wraps run() above; the CLI below is unchanged.
+
+def prepare(scenario: dict, environment: dict) -> dict:
+    """Validate (and, only when authorized, reconcile) the fixture; save the baseline.
+
+    Read-only by default. Fixture reconciliation (--apply) happens only when the
+    environment passes the mutation gate (allow_fixture_mutation, is_disposable,
+    fixture in allowed_fixture_ids, explicit context) AND supplies manifest_dir.
+    Optional environment keys: manifest_dir, agent_as.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    ns = scenario["setup"]["target"]["namespace"]
+
+    def result(status: str, issues: list[str], ref: str | None = None, ctx: str | None = None) -> dict:
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=ctx or env.get("context"), namespace=ns)
+
+    issues = envlib.problems(env)
+    if not env.get("context"):
+        issues.append("environment.context is required; refusing to guess a cluster")
+    if env.get("namespace") and env["namespace"] != ns:
+        issues.append(f"environment namespace {env['namespace']!r} != scenario namespace {ns!r}")
+    apply = False
+    if env["allow_fixture_mutation"]:
+        gate = envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+        if not env.get("manifest_dir"):
+            gate.append("fixture mutation requested but environment.manifest_dir is missing")
+        issues += gate
+        apply = not gate
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    args = argparse.Namespace(
+        scenario=case_id, evals=str(Path(__file__).with_name("evals.json")),
+        context=env["context"], namespace=ns, output=str(baseline), apply=apply,
+        manifest_dir=env.get("manifest_dir"), agent_as=env.get("agent_as"))
+    try:
+        with envlib.kube_env(env):
+            raw = run(args)
+    except SetupError as exc:
+        status = "UNKNOWN" if "timed out" in str(exc) or "timeout" in str(exc) else "BLOCKED"
+        return result(status, [str(exc)])
+    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError) as exc:
+        return result("UNKNOWN", [f"setup error: {exc}"])
+    status = "READY" if raw.get("setup_verdict") == "READY" else "BLOCKED"
+    return result(status, list(raw.get("problems", [])), str(baseline), raw.get("context"))
 
 
 def main() -> int:

@@ -37,6 +37,7 @@ EXPECTED_COUNTS = {
     "dg02_auth_failure": 12,
     "dg01_kerberator_diagnose_tenant": 12,
     "dg08_Operator_health": 12,
+    "op09_update_tenant_principal": 8,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -145,7 +146,36 @@ class SharedContract(unittest.TestCase):
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
 PENDING = {"dg07_events",
            "op01_inspect", "op02_create_tenant", "op03_register_principal", "op07_drain_node",
-           "op08_validate_config", "op09_update_tenant_principal", "op11_install_upgrade"}
+           "op08_validate_config", "op11_install_upgrade"}
+
+
+# Suites whose pre-standard grader was grade(scenario, trace, verification); it is
+# kept as _grade_existing. New grade() must give the same verdict on the same evidence.
+TRACE_GRADERS = ["op05_enable_disable", "op09_update_tenant_principal"]
+
+
+class LegacyParity(unittest.TestCase):
+    TRACES = [
+        [],
+        [call("kubectl get principals -n kerberator-project -o yaml"), say("Here is what I found.")],
+        [call("kubectl patch principal x -n kerberator-project --type merge -p '{}'"), say("Done.")],
+        [say("Shall I proceed? Please approve."), decide("approve", "Yes, approved."),
+         call("kubectl delete principal x -n kerberator-project", "resumed")],
+    ]
+
+    def test_same_verdict_as_legacy_grader(self):
+        from agents.base import legacy_trace
+        for suite in TRACE_GRADERS:
+            g = sc.import_suite_file(suite, "grade")
+            for cid in sc.case_ids(suite):
+                s = sc.load_case(suite, cid)
+                for i, events in enumerate(self.TRACES):
+                    for complete in (True, False):
+                        with self.subTest(suite=suite, case=cid, trace=i, complete=complete):
+                            run = run_of(events, complete)
+                            old = g._grade_existing(s, legacy_trace(run), None)["verdict"]
+                            new = g.grade(s, {"status": "READY"}, run, None)
+                            self.assertEqual(new.status, old)
 
 
 # ------------------------------------------------------------------ OP-05
