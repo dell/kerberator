@@ -38,6 +38,14 @@ import subprocess
 import sys
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
+
+SUITE_ID = "op05_enable_disable_principal"
+
 KINDS = {"Principal": "principals", "Tenant": "tenants"}
 FIXTURE_NAMES = {"uid-8201", "uid-8202", "uid-8205", "uid-8206", "uid-8207",
                  "uid-8208", "uid-8260", "uid-8299", "op05-eval-tenant"}
@@ -209,7 +217,7 @@ def can_i(ctx: str, ns: str, verb: str, kind: str, as_user: str | None) -> bool:
 
 def validate_prerequisites(scenario: dict, snapshot_obj: dict, ctx: str, ns: str,
                            as_user: str | None, strict_recovery: bool) -> list[str]:
-    sid = scenario["id"]
+    sid = scenario["case_id"]
     problems = []
     target = scenario["setup"]["target"]
     key = "principals" if target["kind"] == "Principal" else "tenants"
@@ -263,7 +271,7 @@ def validate_prerequisites(scenario: dict, snapshot_obj: dict, ctx: str, ns: str
 
 def run(a: argparse.Namespace) -> dict:
     suite = json.loads(Path(a.evals).read_text(encoding="utf-8"))
-    matches = [s for s in suite.get("scenarios", []) if s.get("id") == a.scenario]
+    matches = [s for s in suite.get("cases", []) if s.get("case_id") == a.scenario]
     if len(matches) != 1:
         raise SetupError(f"Unknown/duplicate scenario {a.scenario}")
     scenario = matches[0]
@@ -323,7 +331,7 @@ def run(a: argparse.Namespace) -> dict:
     baseline = snapshot(ctx, ns, names)
     problems = validate_prerequisites(scenario, baseline, ctx, ns, a.agent_as, a.strict_recovery)
     result = {
-        "suite_id": suite["suite_id"], "scenario_id": scenario["id"],
+        "suite_id": suite["suite_id"], "scenario_id": scenario["case_id"],
         "setup_verdict": "BLOCKED" if problems else "READY",
         "captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "context": ctx, "namespace": ns,
@@ -341,6 +349,60 @@ def run(a: argparse.Namespace) -> dict:
     tmp.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, output)
     return result
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Wraps run() above; the CLI below is unchanged.
+
+def prepare(scenario: dict, environment: dict) -> dict:
+    """Validate (and, only when authorized, reconcile) the fixture; save the baseline.
+
+    Read-only by default. Fixture reconciliation (--apply) happens only when the
+    environment passes the mutation gate (allow_fixture_mutation, is_disposable,
+    fixture in allowed_fixture_ids, explicit context) AND supplies manifest_dir.
+    Optional environment keys: manifest_dir, agent_as, strict_recovery.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    ns = scenario["setup"]["target"]["namespace"]
+
+    def result(status: str, issues: list[str], ref: str | None = None, ctx: str | None = None) -> dict:
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=ctx or env.get("context"), namespace=ns)
+
+    issues = envlib.problems(env)
+    if not env.get("context"):
+        issues.append("environment.context is required; refusing to guess a cluster")
+    if env.get("namespace") and env["namespace"] != ns:
+        issues.append(f"environment namespace {env['namespace']!r} != scenario namespace {ns!r}")
+    apply = False
+    if env["allow_fixture_mutation"]:
+        gate = envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+        if not env.get("manifest_dir"):
+            gate.append("fixture mutation requested but environment.manifest_dir is missing")
+        issues += gate
+        apply = not gate
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    args = argparse.Namespace(
+        scenario=case_id, evals=str(Path(__file__).with_name("evals.json")),
+        context=env["context"], namespace=ns, output=str(baseline), apply=apply,
+        manifest_dir=env.get("manifest_dir"), agent_as=env.get("agent_as"),
+        strict_recovery=bool(env.get("strict_recovery")), allow_context_mismatch=False)
+    try:
+        with envlib.kube_env(env):
+            raw = run(args)
+    except SetupError as exc:
+        status = "UNKNOWN" if "unavailable" in str(exc) or "timeout" in str(exc) else "BLOCKED"
+        return result(status, [str(exc)])
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        return result("UNKNOWN", [f"setup error: {exc}"])
+    status = "READY" if raw.get("setup_verdict") == "READY" else "BLOCKED"
+    return result(status, list(raw.get("problems", [])), str(baseline), raw.get("context"))
 
 
 def main() -> int:
