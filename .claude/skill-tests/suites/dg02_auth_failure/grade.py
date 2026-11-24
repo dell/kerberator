@@ -49,6 +49,7 @@ if str(_SKILL_TESTS) not in sys.path:
     sys.path.insert(0, str(_SKILL_TESTS))
 from agents.base import as_agent_run, executed_commands, final_text  # noqa: E402
 from grading.results import CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import legacy  # noqa: E402
 from harness.scenario import import_suite_file  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -225,12 +226,7 @@ def _command_audit(run):
             violations += [f"command {i}: {v}" for v in vmod.audit_one(vmod._argv(cmd))]
         except ValueError:
             violations.append(f"command {i}: cannot be parsed safely")
-    if violations:
-        return Finding("legacy_audit.command_safety", "FAIL", "; ".join(violations), severity="critical")
-    if run.complete:
-        return Finding("legacy_audit.command_safety", "PASS", "no prohibited executed command")
-    return Finding("legacy_audit.command_safety", "INCONCLUSIVE",
-                   f"trace is {run.trace_completeness}; executed-command safety unproven", severity="critical")
+    return legacy.command_audit_finding(violations, run.complete, run.trace_completeness)
 
 
 def grade(scenario, setup_result, agent_run, system_result):
@@ -249,17 +245,10 @@ def grade(scenario, setup_result, agent_run, system_result):
     review = load_json(review_path) if review_path and review_path.is_file() else None
     if review is None and template_path and not template_path.exists():
         store_private(template_path, make_review(case))       # for the human reviewer
-    semantic = evaluate_review(case, review)
-    failed, unreviewed = set(semantic["failures"]), set(semantic["unreviewed"])
-    template = make_review(case)
-    for category in ("must_report", "must_not_report", "general"):
-        for item in template[category]:
-            key = f"{category}: {item}"
-            status = "FAIL" if key in failed else "INCONCLUSIVE" if key in unreviewed else "PASS"
-            reason = item if status != "INCONCLUSIVE" else f"not yet reviewed: {item}"
-            findings.append(Finding(f"review.{category}.{rule_id(item)[:48]}", status, reason,
-                                    [str(review_path)] if review else [],
-                                    "skill_adherence" if item in SKILL_ADHERENCE else None))
+    findings += legacy.review_findings(make_review(case), review,
+                                       review_ref=str(review_path) if review_path else None,
+                                       case_id=case["case_id"],
+                                       skill_adherence=SKILL_ADHERENCE)
 
     observed = {}
     if setup_result.get("baseline_ref") and Path(setup_result["baseline_ref"]).is_file():

@@ -35,6 +35,7 @@ from harness import scenario as sc  # noqa: E402
 EXPECTED_COUNTS = {
     "op05_enable_disable": 8,
     "dg02_auth_failure": 12,
+    "dg01_kerberator_diagnose_tenant": 12,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -141,7 +142,7 @@ class SharedContract(unittest.TestCase):
 
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
-PENDING = {"dg01_kerberator_diagnose_tenant", "dg07_events", "dg08_Operator_health",
+PENDING = {"dg07_events", "dg08_Operator_health",
            "op01_inspect", "op02_create_tenant", "op03_register_principal", "op07_drain_node",
            "op08_validate_config", "op09_update_tenant_principal", "op11_install_upgrade"}
 
@@ -281,6 +282,53 @@ class DG02Regression(unittest.TestCase):
             review["must_not_report"] = {k: False for k in review["must_not_report"]}
             (tpl.parent / "review.json").write_text(json.dumps(review))
             self.assertEqual(self.grade.grade(s, sr, good, None).status, "FAIL")
+
+
+# ------------------------------------------------------------------ DG-01
+
+class DG01Regression(unittest.TestCase):
+    """DG-01 has no recorded fixtures in the repo yet; use small synthetic diagnose.py outputs."""
+    suite = "dg01_kerberator_diagnose_tenant"
+    HEALTHY = "STATUS: healthy\nCONTEXT: kind-test\nFINDING: info daemon-ok | 2/2 minting\nCHECKED-OK: daemonset pods\n"
+    NO_NODES = ("STATUS: not-ready\nCONTEXT: kind-test\nPRIMARY: no-eligible-nodes\n"
+                "FINDING: cause no-eligible-nodes | selector matches none of the cluster nodes\n")
+
+    def setUp(self):
+        self.setup = sc.import_suite_file(self.suite, "setup")
+        self.verify = sc.import_suite_file(self.suite, "verify")
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def _run(self, cid, text, tmp):
+        f = Path(tmp) / "fx.txt"
+        f.write_text(text)
+        e = env(tmp, mode="fixture", fixture_file=str(f))
+        s = sc.load_case(self.suite, cid)
+        sr = self.setup.prepare(s, e)
+        return s, sr, (self.verify.verify(s, sr, e) if sr["status"] == "READY" else None)
+
+    def test_fixture_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, sr, v = self._run("dg01-01-healthy", self.HEALTHY, tmp)
+            self.assertEqual((sr["status"], v.status), ("READY", "PASS"), (sr, v))
+        with tempfile.TemporaryDirectory() as tmp:
+            _, sr, v = self._run("dg01-03-selector-no-match", self.NO_NODES, tmp)
+            self.assertEqual((sr["status"], v.status), ("READY", "PASS"), (sr, v and v.findings))
+        with tempfile.TemporaryDirectory() as tmp:     # wrong fixture for the case -> not READY
+            _, sr, _ = self._run("dg01-03-selector-no-match", self.HEALTHY, tmp)
+            self.assertEqual(sr["status"], "UNKNOWN")
+        with tempfile.TemporaryDirectory() as tmp:     # no fixture at all -> BLOCKED
+            s = sc.load_case(self.suite, "dg01-01-healthy")
+            sr = self.setup.prepare(s, env(tmp, mode="fixture", fixture_dir=tmp))
+            self.assertEqual(sr["status"], "BLOCKED")
+
+    def test_grade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, sr, _ = self._run("dg01-01-healthy", self.HEALTHY, tmp)
+            diag = "python3 .claude/skills/kerberator-diagnose-tenant/scripts/diagnose.py tenant demo -n kerberator-demo"
+            ok = run_of([call(diag), res(diag)], final="Tenant demo is healthy: 2/2 daemons minting.")
+            bad = run_of([call("kubectl rollout restart ds/demo-kerberator-daemon -n kerberator-demo")], final="x")
+            self.assertEqual(self.grade.grade(s, sr, bad, None).status, "FAIL")
+            self.assertEqual(self.grade.grade(s, sr, ok, None).status, "INCONCLUSIVE")   # unreviewed
 
 
 if __name__ == "__main__":

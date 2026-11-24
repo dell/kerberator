@@ -1,4 +1,5 @@
 {
+  "suite_id": "dg01_kerberator_diagnose_tenant",
   "skill_id": "DG-01",
   "skill_name": "kerberator-diagnose-tenant",
   "skill_path": ".claude/skills/kerberator-diagnose-tenant",
@@ -32,10 +33,9 @@
   "cases": [
     {
       "case_id": "dg01-01-healthy",
-      "scenario": "healthy_tenant",
+      "setup": {"fixture": "healthy_tenant", "preconditions": ["STATUS: healthy", "DaemonSetReady=True", "Nodes ready n/n", "No current failing Kerberos mint events"]},
       "description": "Tenant and daemon pods are actually healthy.",
-      "user_prompt": "Is tenant demo healthy in namespace kerberator-demo on the test context?",
-      "fixture_requirements": ["STATUS: healthy", "DaemonSetReady=True", "Nodes ready n/n", "No current failing Kerberos mint events"],
+      "prompt": "Is tenant demo healthy in namespace kerberator-demo on the test context?",
       "expected": {
         "status": "healthy",
         "primary": null,
@@ -46,10 +46,9 @@
     },
     {
       "case_id": "dg01-02-ready-true-trap",
-      "scenario": "ready_condition_misleading",
+      "setup": {"fixture": "ready_condition_misleading", "preconditions": ["Ready=True Reconciled", "DaemonSetReady=False", "Nodes ready count below desired", "A causal pod failure FINDING"]},
       "description": "Tenant Ready=True Reconciled while its DaemonSet has unhealthy pods.",
-      "user_prompt": "Tenant demo says Ready=True. Is it actually working? Diagnose it.",
-      "fixture_requirements": ["Ready=True Reconciled", "DaemonSetReady=False", "Nodes ready count below desired", "A causal pod failure FINDING"],
+      "prompt": "Tenant demo says Ready=True. Is it actually working? Diagnose it.",
       "expected": {
         "status": "not-ready",
         "primary": "<fixture causal pod code>",
@@ -60,10 +59,9 @@
     },
     {
       "case_id": "dg01-03-selector-no-match",
-      "scenario": "no_matching_node_labels",
+      "setup": {"fixture": "no_matching_node_labels", "preconditions": ["FINDING: cause no-eligible-nodes", "Node selector matches none of the cluster nodes", "DaemonSet desiredNumberScheduled=0"]},
       "description": "Daemon nodeSelector matches no nodes.",
-      "user_prompt": "Why does tenant demo have zero eligible daemon nodes?",
-      "fixture_requirements": ["FINDING: cause no-eligible-nodes", "Node selector matches none of the cluster nodes", "DaemonSet desiredNumberScheduled=0"],
+      "prompt": "Why does tenant demo have zero eligible daemon nodes?",
       "expected": {
         "status": "not-ready",
         "primary": "no-eligible-nodes",
@@ -74,10 +72,9 @@
     },
     {
       "case_id": "dg01-04-taints-cordon",
-      "scenario": "matching_nodes_cannot_accept_daemon",
+      "setup": {"fixture": "matching_nodes_cannot_accept_daemon", "preconditions": ["FINDING: cause no-eligible-nodes", "At least one selector-match=true node", "Every matching node has an untolerated NoSchedule/NoExecute taint or is unschedulable"]},
       "description": "Nodes match selector but are all tainted or cordoned.",
-      "user_prompt": "The labels look right, but the Tenant daemon isn't scheduled. What's wrong?",
-      "fixture_requirements": ["FINDING: cause no-eligible-nodes", "At least one selector-match=true node", "Every matching node has an untolerated NoSchedule/NoExecute taint or is unschedulable"],
+      "prompt": "The labels look right, but the Tenant daemon isn't scheduled. What's wrong?",
       "expected": {
         "status": "not-ready",
         "primary": "no-eligible-nodes",
@@ -88,10 +85,9 @@
     },
     {
       "case_id": "dg01-05-intentional-subset",
-      "scenario": "intentional_daemon_node_subset",
+      "setup": {"fixture": "intentional_daemon_node_subset", "preconditions": ["STATUS: healthy or healthy-with-warnings", "FINDING: info daemon-node-subset", "Two matching nodes with ready daemons; third node does not match selector"]},
       "description": "Tenant daemon deliberately runs only on a matching subset of nodes.",
-      "user_prompt": "There are three cluster nodes, but demo is 2/2 ready. Is one daemon missing?",
-      "fixture_requirements": ["STATUS: healthy or healthy-with-warnings", "FINDING: info daemon-node-subset", "Two matching nodes with ready daemons; third node does not match selector"],
+      "prompt": "There are three cluster nodes, but demo is 2/2 ready. Is one daemon missing?",
       "expected": {
         "status": "<fixture healthy status>",
         "primary": null,
@@ -102,10 +98,9 @@
     },
     {
       "case_id": "dg01-06-image-pull",
-      "scenario": "daemon_image_pull_failure",
+      "setup": {"fixture": "daemon_image_pull_failure", "preconditions": ["FINDING: cause pod-image-pull", "ErrImagePull or ImagePullBackOff", "DaemonSet image and pod waiting reason"]},
       "description": "Daemon pod is blocked by ErrImagePull or ImagePullBackOff.",
-      "user_prompt": "Diagnose why demo's daemon pods won't start.",
-      "fixture_requirements": ["FINDING: cause pod-image-pull", "ErrImagePull or ImagePullBackOff", "DaemonSet image and pod waiting reason"],
+      "prompt": "Diagnose why demo's daemon pods won't start.",
       "expected": {
         "status": "not-ready",
         "primary": "pod-image-pull",
@@ -116,10 +111,9 @@
     },
     {
       "case_id": "dg01-07-crash-loop",
-      "scenario": "daemon_crash_loop",
+      "setup": {"fixture": "daemon_crash_loop", "preconditions": ["FINDING: cause pod-crash-loop", "CrashLoopBackOff and restart count", "Previous daemon logs with a relevant failure line"]},
       "description": "Daemon is crash-looping and previous logs contain the failure clue.",
-      "user_prompt": "Why is tenant demo's daemon restarting? Please investigate.",
-      "fixture_requirements": ["FINDING: cause pod-crash-loop", "CrashLoopBackOff and restart count", "Previous daemon logs with a relevant failure line"],
+      "prompt": "Why is tenant demo's daemon restarting? Please investigate.",
       "expected": {
         "status": "not-ready",
         "primary": "pod-crash-loop",
@@ -130,10 +124,9 @@
     },
     {
       "case_id": "dg01-08-keytabs-unresolved",
-      "scenario": "unresolved_keytab_reference",
+      "setup": {"fixture": "unresolved_keytab_reference", "preconditions": ["FINDING: cause keytabs-unresolved", "KeytabsResolved=False SomeKeytabsMissing", "Per-Principal keytab reference finding"]},
       "description": "At least one Principal's keytab reference is unresolved.",
-      "user_prompt": "Why are some principals missing from demo's roster?",
-      "fixture_requirements": ["FINDING: cause keytabs-unresolved", "KeytabsResolved=False SomeKeytabsMissing", "Per-Principal keytab reference finding"],
+      "prompt": "Why are some principals missing from demo's roster?",
       "expected": {
         "status": "<fixture-reported-status>",
         "primary": "keytabs-unresolved",
@@ -144,10 +137,9 @@
     },
     {
       "case_id": "dg01-09-mint-failed",
-      "scenario": "current_kerberos_mint_failure",
+      "setup": {"fixture": "current_kerberos_mint_failure", "preconditions": ["FINDING: cause mint-failed", "Newest Event for the affected pod/UID is KerberosMintFailed", "Relevant daemon log or KDC evidence"]},
       "description": "Latest event per pod/UID is KerberosMintFailed and the failure remains current.",
-      "user_prompt": "The daemon is running but tickets aren't being minted for demo. What's the cause?",
-      "fixture_requirements": ["FINDING: cause mint-failed", "Newest Event for the affected pod/UID is KerberosMintFailed", "Relevant daemon log or KDC evidence"],
+      "prompt": "The daemon is running but tickets aren't being minted for demo. What's the cause?",
       "expected": {
         "status": "not-ready",
         "primary": "mint-failed",
@@ -158,10 +150,9 @@
     },
     {
       "case_id": "dg01-10-stale-mint",
-      "scenario": "mint_failure_stale_after_kdc_recovery",
+      "setup": {"fixture": "mint_failure_stale_after_kdc_recovery", "preconditions": ["FINDING: warn mint-failure-stale", "KDC ready now", "Latest mint failure predates KDC pod start or recovery", "Daemon renew interval evidence"]},
       "description": "KDC recovered after last failed mint, but daemon hasn't retried yet.",
-      "user_prompt": "The KDC is back up. Why is demo still showing a mint error?",
-      "fixture_requirements": ["FINDING: warn mint-failure-stale", "KDC ready now", "Latest mint failure predates KDC pod start or recovery", "Daemon renew interval evidence"],
+      "prompt": "The KDC is back up. Why is demo still showing a mint error?",
       "expected": {
         "status": "<fixture-reported-status>",
         "primary": "<fixture-reported-primary>",
@@ -172,10 +163,9 @@
     },
     {
       "case_id": "dg01-11-rbac-unknown",
-      "scenario": "limited_namespace_permissions",
+      "setup": {"fixture": "limited_namespace_permissions", "preconditions": ["FINDING: unknown operator-health or kdc", "Readable Tenant/DaemonSet/pod evidence", "Access-denied evidence for unavailable area"]},
       "description": "Tenant namespace is readable, operator or KDC namespace is forbidden.",
-      "user_prompt": "Diagnose demo using my namespace-only Kubernetes access.",
-      "fixture_requirements": ["FINDING: unknown operator-health or kdc", "Readable Tenant/DaemonSet/pod evidence", "Access-denied evidence for unavailable area"],
+      "prompt": "Diagnose demo using my namespace-only Kubernetes access.",
       "expected": {
         "status": "<fixture-reported-status>",
         "primary": "<fixture-reported-primary-or-null>",
@@ -186,10 +176,9 @@
     },
     {
       "case_id": "dg01-12-multiple-contexts",
-      "scenario": "ambiguous_kubernetes_context",
+      "setup": {"fixture": "ambiguous_kubernetes_context", "preconditions": ["contexts subcommand reports more than one configured context", "No selected cluster mentioned by user"]},
       "description": "Multiple contexts configured; user has not selected one.",
-      "user_prompt": "Can you check if tenant demo is ready?",
-      "fixture_requirements": ["contexts subcommand reports more than one configured context", "No selected cluster mentioned by user"],
+      "prompt": "Can you check if tenant demo is ready?",
       "expected": {
         "status": "requires-user-selection",
         "primary": null,
