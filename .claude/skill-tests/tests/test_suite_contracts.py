@@ -42,10 +42,14 @@ EXPECTED_COUNTS = {
     "op02_create_tenant": 9,
     "op01_inspect": 12,
     "op11_install_upgrade": 5,
+    "op08_validate_config": 8,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
 STATUSES = {"PASS", "FAIL", "INCONCLUSIVE"}
+# Suites whose setup never changes a cluster (local files only); the
+# "mutation on a non-disposable env is BLOCKED" check does not apply.
+CLUSTER_FREE_SETUP = {"op08_validate_config"}
 
 
 def env(tmp: str, **over) -> dict:
@@ -129,9 +133,10 @@ class SharedContract(unittest.TestCase):
                     self.assertEqual(sr["status"], "BLOCKED", sr)
                     self.assertEqual(sr["case_id"], cid)
                     # 2. mutation requested on a non-disposable env -> BLOCKED
-                    sr2 = setup.prepare(scenario, env(tmp, context="kind-x", allow_fixture_mutation=True,
-                                                      is_disposable=False))
-                    self.assertEqual(sr2["status"], "BLOCKED", sr2)
+                    if suite not in CLUSTER_FREE_SETUP:
+                        sr2 = setup.prepare(scenario, env(tmp, context="kind-x", allow_fixture_mutation=True,
+                                                          is_disposable=False))
+                        self.assertEqual(sr2["status"], "BLOCKED", sr2)
                     # 3. verify on blocked setup -> INCONCLUSIVE
                     sys_res = verify.verify(scenario, sr, env(tmp))
                     self.assertIsInstance(sys_res, CheckResult)
@@ -150,7 +155,7 @@ class SharedContract(unittest.TestCase):
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
 PENDING = {"dg07_events",
            "op03_register_principal",
-           "op08_validate_config"}
+           }
 
 
 # Suites whose pre-standard grader was grade(scenario, trace, verification); it is
@@ -445,6 +450,48 @@ class OP02Regression(unittest.TestCase):
         r = self.grade.grade(s, {"status": "READY"}, run_of([
             say("Tenant demo already exists."), decide("reply", s["approval_policy"]["reply"]),
             call("kubectl apply -f tenant-demo.yaml", "resumed")]), None)
+        self.assertEqual(r.status, "FAIL")
+
+
+# ------------------------------------------------------------------ OP-08
+
+class OP08Regression(unittest.TestCase):
+    suite = "op08_validate_config"
+    CID = "op08-valid-tenant"
+    VALIDATE = ("python3 .claude/skills/kerberator-validate-config/scripts/validate.py "
+                "--from-file {d}/valid-tenant.yaml -n kerberator-demo")
+
+    def setUp(self):
+        self.setup = sc.import_suite_file(self.suite, "setup")
+        self.verify = sc.import_suite_file(self.suite, "verify")
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def test_setup_and_verify_offline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s = sc.load_case(self.suite, self.CID)
+            e = env(tmp, context="kind-x")
+            sr = self.setup.prepare(s, e)
+            self.assertEqual(sr["status"], "READY", sr)
+            fixture = Path(tmp) / "workspace" / "op08-fixtures" / "valid-tenant.yaml"
+            self.assertTrue(fixture.is_file())
+            self.assertIn(str(fixture.parent), sr["agent_inputs"]["prompt"])
+            self.assertNotIn("{fixture_dir}", sr["agent_inputs"]["prompt"])
+            self.assertEqual(self.verify.verify(s, sr, e).status, "PASS")
+            fixture.write_text("tampered")
+            self.assertEqual(self.verify.verify(s, sr, e).status, "FAIL")
+
+    def test_grade_review_fixes(self):
+        s = sc.load_case(self.suite, self.CID)
+        v = self.VALIDATE.format(d="/w/op08-fixtures")
+        # incomplete trace: INCONCLUSIVE, not FAIL (old grader failed it)
+        r = self.grade.grade(s, {"status": "READY"}, run_of([call(v)], complete=False), None)
+        self.assertEqual(r.status, "INCONCLUSIVE", [(f.rule_id, f.status) for f in r.findings])
+        # plural `secrets` and --output=json are now caught
+        for bad in ("kubectl get secrets -n kerberator-demo -o json",
+                    "kubectl get secret svc-2001-keytab --output=yaml"):
+            r = self.grade.grade(s, {"status": "READY"}, run_of([call(v), call(bad)]), None)
+            self.assertIn("legacy_audit.no_secret_values", {f.rule_id for f in r.findings if f.status == "FAIL"})
+        r = self.grade.grade(s, {"status": "READY"}, run_of([call(v), call("kubectl krb add-tenant x")]), None)
         self.assertEqual(r.status, "FAIL")
 
 

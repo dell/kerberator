@@ -16,6 +16,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
+
 RUN_DIR = Path(tempfile.gettempdir()) / "kerberator-op08-validate-config"
 FIXTURE_DIR = RUN_DIR / "fixtures"
 MANIFEST = RUN_DIR / "baseline.json"
@@ -94,38 +100,81 @@ def sha256(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
+def write_fixtures(state: str, fixture_dir: Path, manifest: Path) -> dict:
+    """Write the state's YAML files into fixture_dir and their hashes to manifest."""
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    # Remove only files previously generated in this dedicated evaluator dir.
+    for old in fixture_dir.glob("*.yaml"):
+        old.unlink()
+    for filename, content in FIXTURES[state].items():
+        path = fixture_dir / filename
+        path.write_text(content, encoding="utf-8")
+    baseline = {
+        "state": state,
+        "fixture_dir": str(fixture_dir),
+        "files": {
+            path.name: sha256(path)
+            for path in sorted(fixture_dir.glob("*.yaml"))
+        },
+    }
+    manifest.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+    return baseline
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# The CLI above (python setup.py <state>) is unchanged.
+
+SUITE_ID = "op08_validate_config"
+
+
+def prepare(scenario: dict, environment: dict) -> dict:
+    """Write the case's YAML into the agent workspace; hashes go to artifact_dir.
+
+    Never touches Kubernetes. A context is still required because the agent's
+    validator does cluster-side CRD/reference checks. The prompt's
+    {fixture_dir} placeholder is filled in agent_inputs["prompt"].
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    state = scenario["setup"]["fixture"]
+
+    def result(status, issues, ref=None, agent_inputs=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, namespace=NAMESPACE, agent_inputs=agent_inputs)
+
+    issues = envlib.problems(env)
+    if not env.get("context"):
+        issues.append("environment.context is required (the validator checks the cluster)")
+    if state not in FIXTURES:
+        issues.append(f"unknown fixture {state!r}")
+    if issues:
+        return result("BLOCKED", issues)
+    fixture_dir = Path(env["workspace_dir"]) / "op08-fixtures"
+    manifest = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    try:
+        write_fixtures(state, fixture_dir, manifest)
+    except OSError as exc:
+        return result("UNKNOWN", [f"could not write fixtures: {exc}"])
+    return result("READY", [], str(manifest),
+                  {"prompt": scenario["prompt"].replace("{fixture_dir}", str(fixture_dir))})
+
+
 def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in FIXTURES:
         print(f"usage: {sys.argv[0]} <{'|'.join(FIXTURES)}>", file=sys.stderr)
         return 2
-
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Remove only files previously generated in this dedicated evaluator dir.
-    for old in FIXTURE_DIR.glob("*.yaml"):
-        old.unlink()
-
-    for filename, content in FIXTURES[sys.argv[1]].items():
-        path = FIXTURE_DIR / filename
-        path.write_text(content, encoding="utf-8")
-
-    baseline = {
-        "state": sys.argv[1],
-        "fixture_dir": str(FIXTURE_DIR),
-        "files": {
-            path.name: sha256(path)
-            for path in sorted(FIXTURE_DIR.glob("*.yaml"))
-        },
-    }
-    MANIFEST.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
-
+    baseline = write_fixtures(sys.argv[1], FIXTURE_DIR, MANIFEST)
     print(f"STATE: {sys.argv[1]}")
     print(f"FIXTURE_DIR: {FIXTURE_DIR}")
     print(f"BASELINE: {MANIFEST}")
     for name in baseline["files"]:
         print(f"FIXTURE: {FIXTURE_DIR / name}")
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
