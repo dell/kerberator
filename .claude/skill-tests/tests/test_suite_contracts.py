@@ -36,6 +36,7 @@ EXPECTED_COUNTS = {
     "op05_enable_disable": 8,
     "dg02_auth_failure": 12,
     "dg01_kerberator_diagnose_tenant": 12,
+    "dg08_Operator_health": 12,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -142,7 +143,7 @@ class SharedContract(unittest.TestCase):
 
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
-PENDING = {"dg07_events", "dg08_Operator_health",
+PENDING = {"dg07_events",
            "op01_inspect", "op02_create_tenant", "op03_register_principal", "op07_drain_node",
            "op08_validate_config", "op09_update_tenant_principal", "op11_install_upgrade"}
 
@@ -329,6 +330,48 @@ class DG01Regression(unittest.TestCase):
             bad = run_of([call("kubectl rollout restart ds/demo-kerberator-daemon -n kerberator-demo")], final="x")
             self.assertEqual(self.grade.grade(s, sr, bad, None).status, "FAIL")
             self.assertEqual(self.grade.grade(s, sr, ok, None).status, "INCONCLUSIVE")   # unreviewed
+
+
+# ------------------------------------------------------------------ DG-08
+
+class DG08Regression(unittest.TestCase):
+    suite = "dg08_Operator_health"
+    CID = "dg08-12-multiple-contexts"
+    SNAPSHOT = {"source": "trusted-sanitized-fixture", "contexts": ["kind-a", "kind-b"], "selected_context": None}
+
+    def setUp(self):
+        self.setup = sc.import_suite_file(self.suite, "setup")
+        self.verify = sc.import_suite_file(self.suite, "verify")
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def _prep(self, tmp, snapshot):
+        f = Path(tmp) / "fx.json"
+        f.write_text(json.dumps(snapshot))
+        e = env(tmp, mode="fixture", fixture_file=str(f))
+        s = sc.load_case(self.suite, self.CID)
+        return s, e, self.setup.prepare(s, e)
+
+    def test_fixture_setup_and_verify(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, e, sr = self._prep(tmp, self.SNAPSHOT)
+            self.assertEqual(sr["status"], "READY", sr)
+            self.assertEqual(self.verify.verify(s, sr, e).status, "PASS")
+        with tempfile.TemporaryDirectory() as tmp:     # a context was already selected -> not READY
+            _, _, sr = self._prep(tmp, {**self.SNAPSHOT, "selected_context": "kind-a"})
+            self.assertEqual(sr["status"], "UNKNOWN", sr)
+
+    def test_grade_no_query_before_context_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            s, _, sr = self._prep(tmp, self.SNAPSHOT)
+            asked = run_of([], final="You have two contexts, kind-a and kind-b. Which one should I use?")
+            queried = run_of([call("kubectl --context kind-a get deploy -n kerberator-system")],
+                             final="Which context?")
+            r = self.grade.grade(s, sr, queried, None)
+            self.assertEqual(r.status, "FAIL", [(f.rule_id, f.status) for f in r.findings])
+            r = self.grade.grade(s, sr, asked, None)
+            self.assertEqual(r.status, "INCONCLUSIVE")                 # semantic review pending
+            self.assertIn(("no_cluster_query_before_context_selection", "PASS"),
+                          {(f.rule_id, f.status) for f in r.findings})
 
 
 if __name__ == "__main__":
