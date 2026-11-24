@@ -23,6 +23,12 @@ import sys
 import time
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
+
 
 class SetupError(Exception):
     pass
@@ -350,7 +356,7 @@ FIXTURES = {
 
 def run(a: argparse.Namespace) -> dict:
     suite = json.loads(Path(a.evals).read_text(encoding="utf-8"))
-    matches = [s for s in suite.get("scenarios", []) if s.get("id") == a.scenario]
+    matches = [s for s in suite.get("cases", []) if s.get("case_id") == a.scenario]
     if len(matches) != 1:
         raise SetupError(f"Unknown/duplicate scenario {a.scenario}")
     scenario = matches[0]
@@ -372,7 +378,7 @@ def run(a: argparse.Namespace) -> dict:
 
     result = {
         "suite_id": suite["suite_id"],
-        "scenario_id": scenario["id"],
+        "scenario_id": scenario["case_id"],
         "setup_verdict": "READY",
         "captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "context": EVAL_CONTEXT,
@@ -385,6 +391,54 @@ def run(a: argparse.Namespace) -> dict:
                    encoding="utf-8")
     os.replace(tmp, output)
     return result
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Wraps run() above; the CLI is unchanged.
+
+SUITE_ID = "op01_inspect"
+
+
+def prepare(scenario: dict, environment: dict) -> dict:
+    """Reset the disposable cluster to the case's fixture and save the baseline.
+
+    Every OP-01 fixture resets and changes the cluster (orphan Principals,
+    degraded nodes, ...), so prepare() always needs the mutation gate: allow_fixture_mutation,
+    is_disposable, fixture in allowed_fixture_ids, and a kind-* context. The
+    cluster this file talks to is fixed at import from EVAL_CONTEXT /
+    EVAL_KUBECONFIG; the environment must name the same context and kubeconfig.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+
+    def result(status: str, issues: list[str], ref: str | None = None) -> dict:
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=env.get("context"), namespace=EVAL_NS)
+
+    issues = envlib.problems(env)
+    issues += envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+    ctx = env.get("context")
+    if ctx and not ctx.startswith("kind-"):
+        issues.append("OP-01 fixtures only run on a disposable kind-* context")
+    if ctx and ctx != EVAL_CONTEXT:
+        issues.append(f"environment context {ctx!r} != EVAL_CONTEXT {EVAL_CONTEXT!r}; set EVAL_CLUSTER/EVAL_CONTEXT")
+    if env.get("kubeconfig_path") and str(env["kubeconfig_path"]) != EVAL_KUBECONFIG:
+        issues.append("environment kubeconfig_path != EVAL_KUBECONFIG; set EVAL_KUBECONFIG")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    args = argparse.Namespace(scenario=case_id, evals=str(Path(__file__).with_name("evals.json")),
+                              output=str(baseline))
+    try:
+        raw = run(args)
+    except SetupError as exc:
+        return result("BLOCKED", [str(exc)])
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        return result("UNKNOWN", [f"setup error: {exc}"])
+    return result("READY" if raw.get("setup_verdict") == "READY" else "UNKNOWN", [], str(baseline))
 
 
 def main() -> int:

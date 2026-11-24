@@ -40,6 +40,7 @@ EXPECTED_COUNTS = {
     "op09_update_tenant_principal": 8,
     "op07_drain_node": 13,
     "op02_create_tenant": 9,
+    "op01_inspect": 12,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -147,13 +148,13 @@ class SharedContract(unittest.TestCase):
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
 PENDING = {"dg07_events",
-           "op01_inspect", "op03_register_principal",
+           "op03_register_principal",
            "op08_validate_config", "op11_install_upgrade"}
 
 
 # Suites whose pre-standard grader was grade(scenario, trace, verification); it is
 # kept as _grade_existing. New grade() must give the same verdict on the same evidence.
-TRACE_GRADERS = ["op05_enable_disable", "op09_update_tenant_principal", "op07_drain_node"]
+TRACE_GRADERS = ["op05_enable_disable", "op09_update_tenant_principal", "op07_drain_node", "op01_inspect"]
 
 
 class LegacyParity(unittest.TestCase):
