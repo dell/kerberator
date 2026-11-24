@@ -3,7 +3,7 @@
 
 Fixture mode (default): read a saved collect.py output; never contact Kubernetes.
 Live mode: an explicitly selected context; run the skill's collect.py read-only
-and confirm the case's fixture_requirements (SIGNALS) hold.
+and confirm the case's setup.preconditions (SIGNALS) hold.
 
 Live mode can also change a DISPOSABLE cluster, only when asked and only on a
 kind-* context (the `make quickstart` cluster):
@@ -34,6 +34,12 @@ import subprocess
 import sys
 import tempfile
 import time
+
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib, legacy  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]   # suites/<suite> -> skill-tests -> .claude -> repo root
@@ -74,7 +80,7 @@ def requirement_issues(case, parsed):
     if not parsed["signals"]:
         issues.append("No SIGNALS block in collect.py output")
         return issues
-    for req in case["fixture_requirements"]:
+    for req in case["setup"]["preconditions"]:
         key, want = req.split("=", 1)
         got = parsed["signals"].get(key)
         if got is None:
@@ -256,7 +262,71 @@ def atomic_private_json(path, payload):
             os.unlink(tmp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Runs main() above in-process; the CLI is unchanged.
+
+SUITE_ID = "dg02_auth_failure"
+_SETUP_STATUS = {"READY": "READY", "INCONCLUSIVE": "UNKNOWN", "RESET-ONLY": "BLOCKED"}
+
+
+def prepare(scenario, environment):
+    """Confirm the case's fault is present and save the baseline.
+
+    environment["mode"]: "live" (default; needs an explicit context) or
+    "fixture" (offline: reads fixtures/<case>.txt, never contacts Kubernetes).
+    Fault injection (--inject) only when the environment passes the mutation
+    gate AND the context is kind-*. Optional keys: principal, fixture_file.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    defaults = scenario.get("defaults") or {}
+    principal = env.get("principal") or defaults.get("principal", "svc-2001")
+    namespace = env.get("namespace") or defaults.get("namespace", "kerberator-demo")
+    mode = env.get("mode", "live")
+    ctx = env.get("context")
+
+    def result(status, issues, ref=None, context=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=context or ctx, namespace=namespace)
+
+    issues = envlib.problems(env)
+    argv = ["--case-id", case_id, "--mode", mode, "--principal", principal, "--namespace", namespace]
+    if mode == "live":
+        if not ctx:
+            issues.append("environment.context is required in live mode; refusing to guess a cluster")
+        else:
+            argv += ["--context", ctx]
+        if env["allow_fixture_mutation"]:
+            gate = envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+            if ctx and not ctx.startswith("kind-"):
+                gate.append("fault injection only runs on a disposable kind-* context")
+            issues += gate
+            argv.append("--inject")
+    elif mode == "fixture":
+        if env.get("fixture_file"):
+            argv += ["--fixture-file", str(env["fixture_file"])]
+    else:
+        issues.append(f"unknown environment.mode {mode!r}")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    baseline.unlink(missing_ok=True)
+    argv += ["--output", str(baseline)]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None:
+        return result("UNKNOWN", [f"setup error: {err}"])
+    if not baseline.is_file():
+        return result("BLOCKED", [err or "setup produced no baseline"])
+    raw = json.loads(baseline.read_text(encoding="utf-8"))
+    status = _SETUP_STATUS.get(raw.get("setup_status"), "UNKNOWN")
+    return result(status, list(raw.get("issues", [])), str(baseline), raw.get("context"))
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--mode", choices=["fixture", "live"], default="fixture")
@@ -270,7 +340,7 @@ def main():
     parser.add_argument("--wait", type=int, default=240, help="seconds to wait for the fault to show in SIGNALS")
     parser.add_argument("--save-fixture", type=Path, help="live: also save collect.py output here")
     parser.add_argument("--output", type=Path, help="Private JSON baseline path")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     _, case = load_case(args.case_id)
     injected = False
@@ -293,7 +363,7 @@ def main():
             c = Cluster(args.context, args.namespace)
             reset(c)
             if args.inject:
-                inject(c, case["scenario"])
+                inject(c, case["setup"]["fixture"])
                 injected = True
         # Poll: Kubernetes needs a moment for the daemon to re-mint and report.
         deadline = time.time() + (args.wait if (args.reset or args.inject) else 0)
@@ -314,12 +384,12 @@ def main():
 
     baseline = {
         "case_id": args.case_id,
-        "scenario": case["scenario"],
+        "scenario": case["setup"]["fixture"],
         "mode": args.mode,
         # A plain --reset only establishes the healthy baseline, not this case's fault,
         # so verify.py (which requires READY) refuses it unless the case is the healthy one.
         "setup_status": ("INCONCLUSIVE" if issues else
-                         "RESET-ONLY" if (args.reset and not args.inject and case["scenario"] != "healthy_principal")
+                         "RESET-ONLY" if (args.reset and not args.inject and case["setup"]["fixture"] != "healthy_principal")
                          else "READY"),
         "principal": args.principal,
         "namespace": args.namespace,

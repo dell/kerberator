@@ -10,6 +10,8 @@ and grading/common.py can recognise and de-duplicate them later.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 from typing import Any, Iterable
 
 from grading.results import CheckResult, Finding, normalize_status, rule_id
@@ -43,6 +45,24 @@ def from_checks(checks: Iterable[dict], *, name_key: str, status_key: str, reaso
             or ("critical" if rid.startswith(LEGACY_AUDIT_PREFIX) else None),
         ))
     return CheckResult.from_findings(findings)
+
+
+def call_main(main_fn, argv: list[str]) -> tuple[int | None, str, str]:
+    """Run a suite's CLI main(argv) in-process; return (exit_code, stdout, error).
+
+    exit_code is None when main raised; `error` then holds the message.
+    argparse errors (parser.error -> SystemExit) come back as exit code 2.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main_fn(argv)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 2
+        return code, out.getvalue(), (err.getvalue().strip().splitlines() or [str(exc.code)])[-1]
+    except Exception as exc:  # evaluator error, never an agent verdict
+        return None, out.getvalue(), f"{type(exc).__name__}: {exc}"
+    return code, out.getvalue(), err.getvalue().strip()
 
 
 def event_refs(trace: dict, indexes: Iterable[int]) -> list[str]:

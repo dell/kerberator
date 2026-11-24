@@ -1,4 +1,5 @@
 {
+  "suite_id": "dg02_auth_failure",
   "skill_id": "DG-02",
   "skill_name": "kerberator-diagnose-auth-failure",
   "skill_path": ".claude/skills/kerberator-diagnose-auth-failure",
@@ -32,10 +33,9 @@
   "cases": [
     {
       "case_id": "dg02-01-healthy",
-      "scenario": "healthy_principal",
+      "setup": {"fixture": "healthy_principal", "preconditions": ["error_signature=none", "nodes_missing_report=0/", "nodes_failing=0/", "principal_ready=True"]},
       "description": "Control: nothing is broken; the Principal has a ticket on every expected node.",
-      "user_prompt": "Users on our nodes say svc-2001 can't authenticate to the file server. Is Kerberator the problem?",
-      "fixture_requirements": ["error_signature=none", "nodes_missing_report=0/", "nodes_failing=0/", "principal_ready=True"],
+      "prompt": "Users on our nodes say svc-2001 can't authenticate to the file server. Is Kerberator the problem?",
       "expected": {
         "kind": "not-a-kerberator-failure",
         "must_report": [
@@ -51,10 +51,9 @@
     },
     {
       "case_id": "dg02-02-kdc-down",
-      "scenario": "kdc_unreachable",
+      "setup": {"fixture": "kdc_unreachable", "preconditions": ["error_signature=kdc-unreachable"]},
       "description": "The in-cluster KDC is scaled to 0, so every kinit fails.",
-      "user_prompt": "svc-2001 stopped getting Kerberos tickets about ten minutes ago. Can you figure out why?",
-      "fixture_requirements": ["error_signature=kdc-unreachable"],
+      "prompt": "svc-2001 stopped getting Kerberos tickets about ten minutes ago. Can you figure out why?",
       "expected": {
         "kind": "kinit-error",
         "reference": "references/kinit-errors.md",
@@ -72,10 +71,9 @@
     },
     {
       "case_id": "dg02-03-principal-deleted",
-      "scenario": "client_not_found",
+      "setup": {"fixture": "client_not_found", "preconditions": ["error_signature=client-not-found"]},
       "description": "svc-2001 was deleted on the KDC.",
-      "user_prompt": "Authentication for svc-2001 started failing this morning and nobody changed anything on our side. What's going on?",
-      "fixture_requirements": ["error_signature=client-not-found"],
+      "prompt": "Authentication for svc-2001 started failing this morning and nobody changed anything on our side. What's going on?",
       "expected": {
         "kind": "kinit-error",
         "reference": "references/kinit-errors.md",
@@ -93,10 +91,9 @@
     },
     {
       "case_id": "dg02-04-tenant-realm-mismatch",
-      "scenario": "realm_mismatch_no_failure",
+      "setup": {"fixture": "realm_mismatch_no_failure", "preconditions": ["realm_match=no", "error_signature=none"]},
       "description": "The Tenant's spec.realm was changed to WRONG.REALM; krb5.conf is untouched, so tickets still mint.",
-      "user_prompt": "Something looks off with svc-2001's Kerberos setup. Can you check it?",
-      "fixture_requirements": ["realm_match=no", "error_signature=none"],
+      "prompt": "Something looks off with svc-2001's Kerberos setup. Can you check it?",
       "expected": {
         "kind": "principal-config",
         "reference": "references/principal-config.md",
@@ -113,10 +110,9 @@
     },
     {
       "case_id": "dg02-05-wrong-keytab",
-      "scenario": "keytab_no_matching_key",
+      "setup": {"fixture": "keytab_no_matching_key", "preconditions": ["error_signature=keytab-no-matching-key", "keytab_secret=present"]},
       "description": "svc-2001's keytab Secret holds another principal's keytab.",
-      "user_prompt": "svc-2001 can't get tickets since someone updated its keytab. Why?",
-      "fixture_requirements": ["error_signature=keytab-no-matching-key", "keytab_secret=present"],
+      "prompt": "svc-2001 can't get tickets since someone updated its keytab. Why?",
       "expected": {
         "kind": "keytab",
         "reference": "references/keytab-kvno.md",
@@ -135,10 +131,9 @@
     },
     {
       "case_id": "dg02-06-kdc-rekeyed",
-      "scenario": "key_rejected_kdc_rekeyed",
+      "setup": {"fixture": "key_rejected_kdc_rekeyed", "preconditions": ["error_signature=key-rejected"]},
       "description": "svc-2001's key was re-randomized on the KDC (cpw -randkey); the keytab Secret still has the old key.",
-      "user_prompt": "svc-2001 worked yesterday and now every login fails. Can you find out why?",
-      "fixture_requirements": ["error_signature=key-rejected"],
+      "prompt": "svc-2001 worked yesterday and now every login fails. Can you find out why?",
       "expected": {
         "kind": "keytab",
         "reference": "references/keytab-kvno.md",
@@ -157,10 +152,9 @@
     },
     {
       "case_id": "dg02-07-kvno-leading-prompt",
-      "scenario": "leading_kvno_prompt",
+      "setup": {"fixture": "leading_kvno_prompt", "preconditions": ["error_signature=key-rejected"]},
       "description": "Same fault as dg02-06, but the user asserts a cause. The agent must not agree without evidence.",
-      "user_prompt": "svc-2001 is failing with preauth errors. It's a KVNO mismatch, right? Just confirm so I can rotate.",
-      "fixture_requirements": ["error_signature=key-rejected"],
+      "prompt": "svc-2001 is failing with preauth errors. It's a KVNO mismatch, right? Just confirm so I can rotate.",
       "expected": {
         "kind": "keytab",
         "reference": "references/keytab-kvno.md",
@@ -177,10 +171,9 @@
     },
     {
       "case_id": "dg02-08-missing-keytab-secret",
-      "scenario": "keytab_secret_missing",
+      "setup": {"fixture": "keytab_secret_missing", "preconditions": ["keytab_secret=missing"]},
       "description": "svc-2001's keytab Secret was deleted.",
-      "user_prompt": "svc-2001 isn't Ready. What's wrong with it?",
-      "fixture_requirements": ["keytab_secret=missing"],
+      "prompt": "svc-2001 isn't Ready. What's wrong with it?",
       "expected": {
         "kind": "principal-config",
         "reference": "references/principal-config.md",
@@ -197,10 +190,9 @@
     },
     {
       "case_id": "dg02-09-duplicate-uid",
-      "scenario": "duplicate_uid",
+      "setup": {"fixture": "duplicate_uid", "preconditions": ["duplicate_uid=yes", "roster_consistent=False"]},
       "description": "A second active Principal in the same Tenant claims uid 2001, so the operator drops the UID from the roster.",
-      "user_prompt": "svc-2001 stopped minting and the daemon looks healthy. What happened?",
-      "fixture_requirements": ["duplicate_uid=yes", "roster_consistent=False"],
+      "prompt": "svc-2001 stopped minting and the daemon looks healthy. What happened?",
       "expected": {
         "kind": "principal-config",
         "reference": "references/principal-config.md",
@@ -218,10 +210,9 @@
     },
     {
       "case_id": "dg02-10-disabled",
-      "scenario": "principal_disabled",
+      "setup": {"fixture": "principal_disabled", "preconditions": ["principal_disabled=true"]},
       "description": "svc-2001 was disabled on purpose (spec.disabled=true).",
-      "user_prompt": "Why doesn't svc-2001 have a ticket anymore?",
-      "fixture_requirements": ["principal_disabled=true"],
+      "prompt": "Why doesn't svc-2001 have a ticket anymore?",
       "expected": {
         "kind": "not-a-failure-disabled",
         "must_report": [
@@ -237,10 +228,9 @@
     },
     {
       "case_id": "dg02-11-no-eligible-nodes",
-      "scenario": "no_eligible_nodes",
+      "setup": {"fixture": "no_eligible_nodes", "preconditions": ["principal_ready=False", "node_selector={"]},
       "description": "svc-2001's nodeSelector matches no node.",
-      "user_prompt": "svc-2001 shows not Ready on every node. Can you diagnose it?",
-      "fixture_requirements": ["principal_ready=False", "node_selector={"],
+      "prompt": "svc-2001 shows not Ready on every node. Can you diagnose it?",
       "expected": {
         "kind": "principal-config",
         "reference": "references/principal-config.md",
@@ -257,10 +247,9 @@
     },
     {
       "case_id": "dg02-12-other-principal-breaks-daemon",
-      "scenario": "shared_daemon_symptom",
+      "setup": {"fixture": "shared_daemon_symptom", "preconditions": ["daemon_not_ready_reason=missing-ticket(uid=3003)", "principals_mint_failing_in_namespace=1/"]},
       "description": "Another Principal (uid 3003) can't mint, which makes the shared daemon pod not ready. svc-2001 itself is fine.",
-      "user_prompt": "The Kerberator daemon pod is not ready. Is svc-2001 affected, and what's broken?",
-      "fixture_requirements": ["daemon_not_ready_reason=missing-ticket(uid=3003)", "principals_mint_failing_in_namespace=1/"],
+      "prompt": "The Kerberator daemon pod is not ready. Is svc-2001 affected, and what's broken?",
       "expected": {
         "kind": "node-tickets",
         "reference": "references/node-tickets.md",

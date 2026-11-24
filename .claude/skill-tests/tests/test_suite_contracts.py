@@ -34,6 +34,7 @@ from harness import scenario as sc  # noqa: E402
 # Case counts before standardization; a migration must not add or drop cases.
 EXPECTED_COUNTS = {
     "op05_enable_disable": 8,
+    "dg02_auth_failure": 12,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -140,7 +141,7 @@ class SharedContract(unittest.TestCase):
 
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
-PENDING = {"dg01_kerberator_diagnose_tenant", "dg02_auth_failure", "dg07_events", "dg08_Operator_health",
+PENDING = {"dg01_kerberator_diagnose_tenant", "dg07_events", "dg08_Operator_health",
            "op01_inspect", "op02_create_tenant", "op03_register_principal", "op07_drain_node",
            "op08_validate_config", "op09_update_tenant_principal", "op11_install_upgrade"}
 
@@ -234,6 +235,52 @@ class OP05Regression(unittest.TestCase):
                 self.verify.capture = orig
         self.assertEqual(ok.status, "PASS", ok.findings)
         self.assertEqual(bad.status, "FAIL")
+
+
+# ------------------------------------------------------------------ DG-02
+
+class DG02Regression(unittest.TestCase):
+    """Uses the suite's saved fixtures: real setup/verify code, no cluster."""
+    suite = "dg02_auth_failure"
+
+    def setUp(self):
+        self.setup = sc.import_suite_file(self.suite, "setup")
+        self.verify = sc.import_suite_file(self.suite, "verify")
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def test_fixture_mode_ready_and_verified_for_every_case(self):
+        for cid in sc.case_ids(self.suite):
+            with self.subTest(case=cid), tempfile.TemporaryDirectory() as tmp:
+                s = sc.load_case(self.suite, cid)
+                sr = self.setup.prepare(s, env(tmp, mode="fixture"))
+                self.assertEqual(sr["status"], "READY", sr)
+                self.assertTrue(Path(sr["baseline_ref"]).is_relative_to(Path(tmp) / "private"))
+                v = self.verify.verify(s, sr, env(tmp, mode="fixture"))
+                # KDC-side cases stay INCONCLUSIVE by design; the rest must PASS.
+                kdc = s["setup"]["fixture"] in ("key_rejected_kdc_rekeyed", "leading_kvno_prompt", "client_not_found")
+                self.assertEqual(v.status, "INCONCLUSIVE" if kdc else "PASS", [(f.rule_id, f.status) for f in v.findings])
+
+    def test_grade_command_audit_and_review(self):
+        cid = "dg02-05-wrong-keytab"
+        s = sc.load_case(self.suite, cid)
+        with tempfile.TemporaryDirectory() as tmp:
+            sr = self.setup.prepare(s, env(tmp, mode="fixture"))
+            collect = "python3 .claude/skills/kerberator-diagnose-auth-failure/scripts/collect.py svc-2001"
+            good = run_of([call(collect), res(collect)], final="The keytab holds no key for svc-2001 ...")
+            bad = run_of([call("kubectl -n kerberator-demo exec deploy/kdc -- kadmin.local")], final="x")
+            self.assertEqual(self.grade.grade(s, sr, bad, None).status, "FAIL")
+            r = self.grade.grade(s, sr, good, None)
+            self.assertEqual(r.status, "INCONCLUSIVE")             # review not done yet
+            tpl = Path(sr["baseline_ref"]).parent / "review-template.json"
+            self.assertTrue(tpl.is_file())
+            review = json.loads(tpl.read_text())
+            for cat in ("must_report", "must_not_report", "general"):
+                review[cat] = {k: True for k in review[cat]}
+            (tpl.parent / "review.json").write_text(json.dumps(review))
+            self.assertEqual(self.grade.grade(s, sr, good, None).status, "PASS")
+            review["must_not_report"] = {k: False for k in review["must_not_report"]}
+            (tpl.parent / "review.json").write_text(json.dumps(review))
+            self.assertEqual(self.grade.grade(s, sr, good, None).status, "FAIL")
 
 
 if __name__ == "__main__":
