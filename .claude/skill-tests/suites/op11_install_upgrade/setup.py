@@ -45,6 +45,12 @@ import sys
 import time
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
+
 RELEASE = "kerberator"
 OPERATOR_NS = "kerberator-system"
 DEMO_NS = "kerberator-demo"
@@ -257,7 +263,7 @@ def canary_hashes(value: str) -> dict:
 
 def apply_fixture(scenario: dict, ctx: str, canary_from_env: bool) -> dict:
     """Return private fixture facts (hashes only). Mutates only the named fixtures."""
-    sid = scenario["id"]
+    sid = scenario["case_id"]
     private: dict[str, Any] = {}
     if sid in ("op11-01", "op11-02"):
         if OP11_CONTEXT not in probe_contexts(LOCAL)["contexts"]:
@@ -299,7 +305,7 @@ def apply_fixture(scenario: dict, ctx: str, canary_from_env: bool) -> dict:
 
 
 def validate_prerequisites(scenario: dict, snap: dict, private: dict) -> list[str]:
-    sid = scenario["id"]
+    sid = scenario["case_id"]
     problems: list[str] = []
     local = snap.get(LOCAL, {}).get("contexts", {})
     if sid == "op11-01":
@@ -353,7 +359,7 @@ def validate_prerequisites(scenario: dict, snap: dict, private: dict) -> list[st
 
 def run(a: argparse.Namespace) -> dict:
     suite = json.loads(Path(a.evals).read_text(encoding="utf-8"))
-    matches = [s for s in suite.get("scenarios", []) if s.get("id") == a.scenario]
+    matches = [s for s in suite.get("cases", []) if s.get("case_id") == a.scenario]
     if len(matches) != 1:
         raise SetupError(f"Unknown/duplicate scenario {a.scenario}")
     scenario = matches[0]
@@ -363,9 +369,9 @@ def run(a: argparse.Namespace) -> dict:
     target_ctx = scenario["setup"]["target"]["context"]
     private: dict[str, Any] = {}
     if a.apply:
-        if scenario["id"] == "op11-03":
+        if scenario["case_id"] == "op11-03":
             raise SetupError("op11-03 needs only make quickstart; build it by hand (see setup.tester_actions)")
-        if scenario["id"] in ("op11-02", "op11-04", "op11-05"):
+        if scenario["case_id"] in ("op11-02", "op11-04", "op11-05"):
             # These build on the make quickstart cluster, which setup.py never creates.
             if "kind-kerberator" not in probe_contexts(LOCAL)["contexts"]:
                 raise SetupError("kind-kerberator is missing; run make quickstart first")
@@ -382,10 +388,10 @@ def run(a: argparse.Namespace) -> dict:
     notes = ["Only the named fixtures were optionally changed by setup; agent has not run.",
              "Secret contents, kubeconfig contents and Helm values were never retrieved.",
              "The canary value is not stored; only SHA-256 hashes of it and its base64 are."]
-    if scenario["id"] == "op11-01":
+    if scenario["case_id"] == "op11-01":
         notes.append(f"cert-manager present: {baseline['kind-kerberator-op11']['cert_manager']['present']}")
     result = {
-        "suite_id": suite["suite_id"], "scenario_id": scenario["id"],
+        "suite_id": suite["suite_id"], "scenario_id": scenario["case_id"],
         "setup_verdict": "BLOCKED" if problems else "READY",
         "captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "contexts": scenario_contexts(scenario), "namespace": scenario["setup"]["target"]["namespace"],
@@ -402,6 +408,58 @@ def run(a: argparse.Namespace) -> dict:
     os.chmod(tmp, 0o600)
     os.replace(tmp, output)
     return result
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Wraps run() above; the CLI is unchanged.
+
+SUITE_ID = "op11_install_upgrade"
+
+
+def prepare(scenario: dict, environment: dict) -> dict:
+    """Validate (and, only when authorized, build) the disposable starting state.
+
+    OP-11 cases name their own kind contexts (setup.target / setup.observe);
+    environment.context must be one of them. --apply only via the mutation
+    gate. Optional environment key: canary_from_env (op11-05, reads OP11_CANARY).
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    contexts = scenario_contexts(scenario)
+    ns = scenario["setup"]["target"]["namespace"]
+
+    def result(status: str, issues: list[str], ref: str | None = None) -> dict:
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=env.get("context"), namespace=ns)
+
+    issues = envlib.problems(env)
+    if not env.get("context"):
+        issues.append("environment.context is required; refusing to guess a cluster")
+    elif env["context"] not in contexts:
+        issues.append(f"environment context {env['context']!r} is not one this case uses: {sorted(contexts)}")
+    apply = False
+    if env["allow_fixture_mutation"]:
+        gate = envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+        issues += gate
+        apply = not gate
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    args = argparse.Namespace(scenario=case_id, evals=str(Path(__file__).with_name("evals.json")),
+                              output=str(baseline), apply=apply,
+                              canary_from_env=bool(env.get("canary_from_env")))
+    try:
+        with envlib.kube_env(env):
+            raw = run(args)
+    except SetupError as exc:
+        return result("BLOCKED", [str(exc)])
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+        return result("UNKNOWN", [f"setup error: {exc}"])
+    status = "READY" if raw.get("setup_verdict") == "READY" else "BLOCKED"
+    return result(status, list(raw.get("problems", [])), str(baseline))
 
 
 def main() -> int:
