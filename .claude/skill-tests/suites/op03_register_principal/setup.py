@@ -3,6 +3,13 @@
 import argparse
 import json
 from pathlib import Path
+import sys
+
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib  # noqa: E402
 
 FIXTURES = {
     "ready-local-keytab": {
@@ -65,13 +72,9 @@ FIXTURES = {
 }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, required=True,
-                        help="Directory where synthetic fixtures will be written")
-    args = parser.parse_args()
-
-    args.out.mkdir(parents=True, exist_ok=True)
+def write_fixtures(out: Path) -> dict:
+    """Write every synthetic fixture plus manifest.json into `out`."""
+    out.mkdir(parents=True, exist_ok=True)
     manifest = {
         "suite": "op03-register-principal",
         "fixture_mode": "synthetic-only",
@@ -79,15 +82,56 @@ def main():
         "contains_real_credentials": False,
         "fixtures": sorted(FIXTURES)
     }
-
     for name, contents in FIXTURES.items():
-        path = args.out / f"{name}.json"
+        path = out / f"{name}.json"
         path.write_text(json.dumps(contents, indent=2) + "\n", encoding="utf-8")
-
-    (args.out / "manifest.json").write_text(
+    (out / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
+    return manifest
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", type=Path, required=True,
+                        help="Directory where synthetic fixtures will be written")
+    args = parser.parse_args()
+    write_fixtures(args.out)
     print(f"Created {len(FIXTURES)} synthetic fixtures in {args.out}")
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# The CLI above (python setup.py --out DIR) is unchanged.
+
+SUITE_ID = "op03_register_principal"
+
+
+def prepare(scenario, environment):
+    """Write the synthetic fixtures into the evaluator's private artifact_dir.
+
+    OP-03 is synthetic: no cluster is created or changed. The fixtures hold
+    hidden expectations (expected_precheck), so they never go in the agent
+    workspace; the case prompt already describes the situation to the agent.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+
+    def result(status, issues, ref=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref, issues=issues)
+
+    issues = envlib.problems(env)
+    if scenario["setup"].get("fixture") not in FIXTURES:
+        issues.append(f"unknown fixture {scenario['setup'].get('fixture')!r}")
+    if issues:
+        return result("BLOCKED", issues)
+    out = envlib.artifact_path(env, suite_id, case_id, "fixtures/manifest.json").parent
+    try:
+        write_fixtures(out)
+    except OSError as exc:
+        return result("UNKNOWN", [f"could not write fixtures: {exc}"])
+    return result("READY", [], str(out / "manifest.json"))
 
 
 if __name__ == "__main__":
