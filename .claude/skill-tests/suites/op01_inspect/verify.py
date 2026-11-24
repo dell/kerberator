@@ -174,13 +174,24 @@ def verify_no_change(baseline: dict) -> list[dict]:
     else:
         checks.append(finding("daemonset_spec", "FAIL", "DaemonSet placement changed"))
 
-    b_secret_names = sorted(s["name"] for s in baseline.get("secrets", []))
-    a_secret_names = sorted(s["name"] for s in after.get("secrets", []))
-    if b_secret_names == a_secret_names:
-        checks.append(finding("secrets", "PASS", "no user Secret created or deleted"))
+    b_secrets = {s["name"]: s.get("resourceVersion") for s in baseline.get("secrets", [])}
+    a_secrets = {s["name"]: s.get("resourceVersion") for s in after.get("secrets", [])}
+    if b_secrets == a_secrets:
+        checks.append(finding("secrets", "PASS", "no user Secret created, deleted, or modified"))
     else:
+        created = sorted(set(a_secrets) - set(b_secrets))
+        deleted = sorted(set(b_secrets) - set(a_secrets))
+        modified = sorted(k for k in set(b_secrets) & set(a_secrets)
+                          if b_secrets[k] != a_secrets[k])
+        parts = []
+        if created:
+            parts.append(f"created: {','.join(created)}")
+        if deleted:
+            parts.append(f"deleted: {','.join(deleted)}")
+        if modified:
+            parts.append(f"modified: {','.join(modified)}")
         checks.append(finding("secrets", "FAIL",
-                               f"Secret set changed: was {b_secret_names}, now {a_secret_names}"))
+                               f"Secret set changed: {'; '.join(parts)}"))
 
     if after.get("nodes") == baseline.get("nodes"):
         checks.append(finding("nodes", "PASS",

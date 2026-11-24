@@ -97,6 +97,9 @@ def wait_for(what: str, fn, *args, timeout: int | None = None) -> bool:
 
 
 def require_cluster() -> None:
+    if not EVAL_CONTEXT.startswith("kind-"):
+        die(f"refusing to run on non-disposable cluster: context {EVAL_CONTEXT!r} "
+            f"does not start with 'kind-'")
     kc = Path(EVAL_KUBECONFIG)
     if not kc.exists() or kc.stat().st_size == 0:
         die(f"no kubeconfig at {EVAL_KUBECONFIG}; run cluster.py first")
@@ -232,11 +235,12 @@ def save_baseline(output: Path) -> dict:
 def reset() -> None:
     for n in (W1, W2):
         kubectl("uncordon", n)
+        kubectl("taint", "node", n, "kerberator-eval/block:NoExecute-")
 
     for p in [it["metadata"]["name"]
               for it in kn_json("get", "principals").get("items", [])]:
         if p and p != PRINCIPAL:
-            kn("delete", "principal", p, "--wait=false")
+            kn("delete", "principal", p, "--wait=true", "--timeout=60s")
 
     for f in ("tenant", "principal"):
         manifest = REPO_ROOT / "examples" / "quickstart" / f"{f}.yaml"
@@ -279,15 +283,10 @@ def fixture_baseline() -> None:
 
 def fixture_degraded_principal() -> None:
     reset()
-    r = kubectl("cordon", W1)
+    eval_taint = "kerberator-eval/block:NoExecute"
+    r = kubectl("taint", "node", W1, eval_taint)
     if r.returncode != 0:
-        die(f"cordon {W1} failed: {r.stderr.strip()}")
-    if not wait_for(f"{W1} cordoned", node_is_cordoned, W1):
-        die(f"{W1} did not report unschedulable")
-    r = kn("delete", "pod", "-l", DAEMON_PODS,
-           "--field-selector", f"spec.nodeName={W1}", "--wait=true")
-    if r.returncode != 0:
-        die(f"delete daemon pod on {W1} failed: {r.stderr.strip()}")
+        die(f"taint {W1} failed: {r.stderr.strip()}")
     if not wait_for(f"daemon Ready on {W2} only", daemon_on, W2):
         die(f"daemon not Ready on {W2}")
     if not wait_for(f"{PRINCIPAL} Minted on {W2} (1/1)",
@@ -297,6 +296,22 @@ def fixture_degraded_principal() -> None:
 
 def fixture_orphan_principal() -> None:
     reset()
+    throwaway_tenant = (
+        "apiVersion: kerberator.dell.com/v1alpha1\n"
+        "kind: Tenant\n"
+        "metadata:\n"
+        "  name: throwaway-tenant\n"
+        f"  namespace: {EVAL_NS}\n"
+        "spec:\n"
+        "  realm: GHOST.REALM\n"
+    )
+    r = subprocess.run(
+        ["kubectl", "--kubeconfig", EVAL_KUBECONFIG, "--context", EVAL_CONTEXT,
+         "-n", EVAL_NS, "apply", "-f", "-"],
+        input=throwaway_tenant, capture_output=True, text=True)
+    if r.returncode != 0:
+        die(f"create throwaway tenant failed: {r.stderr.strip()}")
+
     orphan_manifest = (
         "apiVersion: kerberator.dell.com/v1alpha1\n"
         "kind: Principal\n"
@@ -307,17 +322,22 @@ def fixture_orphan_principal() -> None:
         "  uid: 9999\n"
         "  principal: orphan-svc@GHOST.REALM\n"
         "  tenantRef:\n"
-        "    name: nonexistent-tenant\n"
-        "  keytabSecret:\n"
+        "    name: throwaway-tenant\n"
+        "  keytabSecretRef:\n"
         "    name: orphan-svc-keytab\n"
         "    key: orphan-svc.keytab\n"
     )
     r = subprocess.run(
         ["kubectl", "--kubeconfig", EVAL_KUBECONFIG, "--context", EVAL_CONTEXT,
-         "apply", "-f", "-"],
+         "-n", EVAL_NS, "apply", "-f", "-"],
         input=orphan_manifest, capture_output=True, text=True)
     if r.returncode != 0:
-        die(f"apply orphan principal failed: {r.stderr.strip()}")
+        die(f"create orphan principal failed: {r.stderr.strip()}")
+
+    r = kubectl("-n", EVAL_NS, "delete", "tenant", "throwaway-tenant",
+                "--wait=true", "--timeout=60s")
+    if r.returncode != 0 and "NotFound" not in r.stderr:
+        die(f"delete throwaway tenant failed: {r.stderr.strip()}")
     time.sleep(5)
 
 
