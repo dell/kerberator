@@ -107,8 +107,13 @@ def artifact_path(environment: dict, suite_id: str, case_id: str, name: str) -> 
 
 def setup_result(status: str, scenario: dict, environment: dict, *, baseline_ref: str | None,
                  issues: list[str] | None = None, context: str | None = None,
-                 namespace: str | None = None) -> dict:
-    """Canonical SetupResult. status: READY | BLOCKED | UNKNOWN."""
+                 namespace: str | None = None, agent_inputs: dict | None = None) -> dict:
+    """Canonical SetupResult. status: READY | BLOCKED | UNKNOWN.
+
+    agent_inputs (optional): what setup resolved for the agent run, e.g.
+    {"prompt": <prompt with placeholders filled>, "kubeconfig": ..., "context": ...}.
+    The runner uses agent_inputs["prompt"] instead of scenario["prompt"] when present.
+    """
     if status not in ("READY", "BLOCKED", "UNKNOWN"):
         raise ValueError(f"bad setup status {status!r}")
     env = normalize(environment)
@@ -121,4 +126,5 @@ def setup_result(status: str, scenario: dict, environment: dict, *, baseline_ref
         "context": context if context is not None else env.get("context"),
         "namespace": namespace if namespace is not None else env.get("namespace"),
         "issues": list(issues or []),
+        **({"agent_inputs": agent_inputs} if agent_inputs else {}),
     }

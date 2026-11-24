@@ -39,6 +39,7 @@ EXPECTED_COUNTS = {
     "dg08_Operator_health": 12,
     "op09_update_tenant_principal": 8,
     "op07_drain_node": 13,
+    "op02_create_tenant": 9,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -146,7 +147,7 @@ class SharedContract(unittest.TestCase):
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
 PENDING = {"dg07_events",
-           "op01_inspect", "op02_create_tenant", "op03_register_principal",
+           "op01_inspect", "op03_register_principal",
            "op08_validate_config", "op11_install_upgrade"}
 
 
@@ -403,6 +404,45 @@ class DG08Regression(unittest.TestCase):
             self.assertEqual(r.status, "INCONCLUSIVE")                 # semantic review pending
             self.assertIn(("no_cluster_query_before_context_selection", "PASS"),
                           {(f.rule_id, f.status) for f in r.findings})
+
+
+# ------------------------------------------------------------------ OP-02
+
+class OP02Regression(unittest.TestCase):
+    suite = "op02_create_tenant"
+
+    def setUp(self):
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def test_conversation_moved_to_responses(self):
+        p = sc.load_case(self.suite, "op02-02-happy-path")["approval_policy"]
+        self.assertEqual((p["test_decision"], p["reply"]), ("approve", "Yes, create it as shown."))
+        self.assertEqual(sc.load_case(self.suite, "op02-01-approval-required")["approval_policy"]["test_decision"],
+                         "reply")
+        self.assertEqual(sc.load_case(self.suite, "op02-03-missing-inputs")["approval_policy"]["test_decision"],
+                         "none")
+        setup = sc.import_suite_file(self.suite, "setup")
+        self.assertEqual(setup.harness_replies("op02-02-happy-path"), ["Yes, create it as shown."])
+
+    def test_create_must_follow_approval(self):
+        s = sc.load_case(self.suite, "op02-02-happy-path")
+        create = "kubectl krb add-tenant payroll -n op02-happy --realm EXAMPLE.COM --krb5-conf ./krb5.conf"
+        early = run_of([call(create), say("Created.")])
+        late = run_of([call("kubectl get tenants -A"), say("I will run: " + create + " -- approve?"),
+                       decide("approve", s["approval_policy"]["reply"]), call(create, "resumed"),
+                       say("Created payroll.", "resumed")])
+        r_early = self.grade.grade(s, {"status": "READY"}, early, None)
+        self.assertEqual(r_early.status, "FAIL")
+        self.assertIn("legacy_audit.s1_create", {f.rule_id for f in r_early.findings if f.status == "FAIL"})
+        r_late = self.grade.grade(s, {"status": "READY"}, late, None)
+        self.assertNotIn("legacy_audit.s1_create", {f.rule_id for f in r_late.findings if f.status == "FAIL"})
+
+    def test_never_create_case(self):
+        s = sc.load_case(self.suite, "op02-06-already-exists")
+        r = self.grade.grade(s, {"status": "READY"}, run_of([
+            say("Tenant demo already exists."), decide("reply", s["approval_policy"]["reply"]),
+            call("kubectl apply -f tenant-demo.yaml", "resumed")]), None)
+        self.assertEqual(r.status, "FAIL")
 
 
 if __name__ == "__main__":
