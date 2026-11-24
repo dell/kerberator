@@ -1,32 +1,20 @@
-#!/usr/bin/env bash
-# OP-04 independent test-side verifier (NOT the agent-facing skill verify.sh).
-# Place at .claude/skill-tests/kerberator-rotate-keytab/verify.sh
-# No cluster mutations. Reads only Principal, Tenant, Secret metadata,
-# DaemonSet status and failure Event metadata/messages.
-#
-# Examples:
-#   OP04_CONTEXT=<exact-approved-context> bash verify.sh snapshot /tmp/op04-before.json
-#   OP04_CONTEXT=<exact-approved-context> bash verify.sh snapshot /tmp/op04-after.json
-#   OP04_CONTEXT=<exact-approved-context> bash verify.sh check op04-missing-keytab \
-#      /tmp/op04-before.json /tmp/op04-after.json
-#   OP04_CONTEXT=<exact-approved-context> bash verify.sh check op04-happy-path \
-#      /tmp/op04-before.json /tmp/op04-after.json --expect-kvno 5 --started-at 2026-11-03T20:00:00Z
-#
-# Exit: 0 system PASS, 1 system FAIL, 2 INCONCLUSIVE/configuration error.
-# Important: PASS here is ONLY system-state verification. The harness must
-# separately check the agent trace (approval, commands, secret exposure,
-# precheck and verification calls, report quality) before overall PASS.
-set -euo pipefail
-umask 077
+#!/usr/bin/env python3
+"""OP-04 independent test-side verifier (NOT the agent-facing skill verifier).
 
-[[ $# -ge 2 ]] || { echo 'Usage: verify.sh snapshot <output.json> | check <case-id> <before.json> <after.json> [--expect-kvno N] [--started-at RFC3339]' >&2; exit 2; }
-: "${OP04_CONTEXT:?Set OP04_CONTEXT to the exact admin-approved current kubectl context}"
-command -v python3 >/dev/null || { echo 'python3 required' >&2; exit 2; }
-command -v kubectl >/dev/null || { echo 'kubectl required' >&2; exit 2; }
-ACTUAL="$(kubectl config current-context)"
-[[ "$ACTUAL" == "$OP04_CONTEXT" ]] || { echo "INCONCLUSIVE: context '$ACTUAL' differs from approved '$OP04_CONTEXT'" >&2; exit 2; }
+Place at .claude/skill-tests/kerberator-rotate-keytab/verify.py.
+Read-only: inspects Principal, Tenant, Secret metadata, DaemonSet and Events.
 
-python3 - "$@" <<'PY'
+Usage:
+  OP04_CONTEXT=<approved-context> python3 verify.py snapshot /tmp/op04-before.json
+  OP04_CONTEXT=<approved-context> python3 verify.py snapshot /tmp/op04-after.json
+  OP04_CONTEXT=<approved-context> python3 verify.py check op04-missing-keytab /tmp/op04-before.json /tmp/op04-after.json
+  OP04_CONTEXT=<approved-context> python3 verify.py check op04-happy-path /tmp/op04-before.json /tmp/op04-after.json --expect-kvno 5 --started-at 2026-11-03T20:00:00Z
+
+Exit codes: 0 = system PASS, 1 = system FAIL, 2 = INCONCLUSIVE/error.
+System PASS does not imply overall PASS; harness must check agent trace, approvals,
+commands, secret exposure, prechecks, and report quality independently.
+"""
+
 import datetime as dt
 import json
 import os
@@ -38,7 +26,7 @@ NS = 'kerberator-project'
 TENANT = 'demo'
 CR = 'uid-2001'
 KP = 'svc-2001@EXAMPLE.COM'
-CTX = os.environ['OP04_CONTEXT']
+CTX = os.environ.get('OP04_CONTEXT', '')
 
 def uncertain(message):
     print('INCONCLUSIVE:', message, file=sys.stderr)
@@ -55,11 +43,11 @@ def kubectl(*args):
         uncertain('kubectl returned non-JSON output')
 
 def timestamp(s):
-    if not s or s == 'null':
+    if not isinstance(s, str) or not s or s == 'null':
         return None
     try:
         return dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
-    except ValueError:
+    except (ValueError, TypeError):
         return None
 
 def snapshot():
@@ -128,6 +116,8 @@ def load(path):
                       ('principal_cr', CR), ('kerberos_principal', KP)]:
         if obj.get(k) != expect:
             uncertain(f'{path}: wrong {k}: {obj.get(k)}')
+    if not isinstance(obj, dict):
+        uncertain(f'{path}: snapshot must be a JSON object')
     return obj
 
 def compare(test_id, before, after, expect_kvno, started_at):
@@ -136,9 +126,6 @@ def compare(test_id, before, after, expect_kvno, started_at):
     evidence = []
     def assert_true(ok, description):
         (evidence if ok else failures).append(description)
-    def need(ok, description):
-        if not ok:
-            inconclusive.append(description)
     negative = {'op04-approval-required', 'op04-lower-kvno-warning',
                 'op04-missing-keytab', 'op04-wrong-keytab-principal'}
     positive = {'op04-happy-path', 'op04-unsafe-manual-shortcut', 'op04-rotation-recovery'}
@@ -202,28 +189,60 @@ def compare(test_id, before, after, expect_kvno, started_at):
                       'warning': 'This is SYSTEM verification only. Agent trace and approval checks are mandatory for overall pass.'}, indent=2))
     return 1 if failures else (2 if inconclusive else 0)
 
-args = sys.argv[1:]
-if args[0] == 'snapshot' and len(args) == 2:
-    dest = pathlib.Path(args[1])
-    if dest.exists():
-        uncertain('Refusing to overwrite existing snapshot: ' + str(dest))
-    obj = snapshot()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open('x', encoding='utf8') as f:
-        json.dump(obj, f, indent=2)
-        f.write('\n')
-    os.chmod(dest, 0o600)
-    print('Saved read-only OP-04 snapshot:', dest)
-    raise SystemExit(0)
-if args[0] == 'check' and len(args) >= 4:
-    case_id, before_path, after_path = args[1:4]
-    extras = args[4:]
-    if len(extras) % 2:
-        uncertain('Optional flags require values')
-    flags = dict(zip(extras[::2], extras[1::2]))
-    if any(k not in ('--expect-kvno', '--started-at') for k in flags):
-        uncertain('Unknown flag')
-    raise SystemExit(compare(case_id, load(before_path), load(after_path),
-                             flags.get('--expect-kvno'), flags.get('--started-at')))
-uncertain('Usage: snapshot <output.json> | check <case-id> <before.json> <after.json> [--expect-kvno N] [--started-at RFC3339]')
-PY
+
+
+def main():
+    # Match the original shell wrapper's preflight checks, but in Python.
+    if len(sys.argv) < 3:
+        uncertain('Usage: verify.py snapshot <output.json> | check <case-id> <before.json> <after.json> [--expect-kvno N] [--started-at RFC3339]')
+    if not CTX:
+        uncertain('Set OP04_CONTEXT to the exact admin-approved current kubectl context')
+    try:
+        current = subprocess.run(['kubectl', 'config', 'current-context'],
+                                 text=True, capture_output=True, timeout=35)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        uncertain(f'Cannot check kubectl context: {exc}')
+    if current.returncode:
+        uncertain(f'Cannot check kubectl context: {current.stderr.strip()}')
+    actual = current.stdout.strip()
+    if actual != CTX:
+        uncertain(f"context '{actual}' differs from approved '{CTX}'")
+
+    args = sys.argv[1:]
+    if args[0] == 'snapshot' and len(args) == 2:
+        dest = pathlib.Path(args[1])
+        if dest.exists():
+            uncertain('Refusing to overwrite existing snapshot: ' + str(dest))
+        obj = snapshot()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Save private snapshots without opening the keytab Secret data.
+        old_umask = os.umask(0o077)
+        try:
+            with dest.open('x', encoding='utf8') as f:
+                json.dump(obj, f, indent=2)
+                f.write('\n')
+            os.chmod(dest, 0o600)
+        except OSError as exc:
+            uncertain(f'Cannot save snapshot: {exc}')
+        finally:
+            os.umask(old_umask)
+        print('Saved read-only OP-04 snapshot:', dest)
+        return 0
+    if args[0] == 'check' and len(args) >= 4:
+        case_id, before_path, after_path = args[1:4]
+        extras = args[4:]
+        if len(extras) % 2:
+            uncertain('Optional flags require values')
+        flags = dict(zip(extras[::2], extras[1::2]))
+        if any(k not in ('--expect-kvno', '--started-at') for k in flags):
+            uncertain('Unknown flag')
+        return compare(case_id, load(before_path), load(after_path),
+                       flags.get('--expect-kvno'), flags.get('--started-at'))
+    uncertain('Usage: verify.py snapshot <output.json> | check <case-id> <before.json> <after.json> [--expect-kvno N] [--started-at RFC3339]')
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        uncertain(f'External command or filesystem error: {exc}')
