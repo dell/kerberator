@@ -14,6 +14,15 @@ import difflib
 import json
 import pathlib
 import sys
+import contextlib
+import io
+
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = pathlib.Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from grading.results import CheckResult, Finding, inconclusive  # noqa: E402
+from harness import environment as envlib  # noqa: E402
 
 SUITE_DIR = pathlib.Path(__file__).resolve().parent
 SKILL_TESTS_DIR = SUITE_DIR.parents[1]    # .../skill-tests/
@@ -22,7 +31,16 @@ LIB_DIR = EVALS_DIR / "lib"
 
 sys.path.insert(0, str(LIB_DIR))
 
-from common import BASELINE, die, read_baseline, require_cluster, snapshot  # noqa: E402
+try:
+    from common import BASELINE, die, read_baseline, require_cluster, snapshot  # noqa: E402
+    _DEPENDENCY_ERROR = None
+except ImportError as _exc:
+    # evals/lib/common.py and evals/setup/reset.py came from the pre-squash
+    # PR #33 branch (commit e1fe575) and are not on skills. Fail clearly
+    # instead of with a traceback; prepare() reports BLOCKED.
+    _DEPENDENCY_ERROR = (f"{_exc}: DG-07 needs evals/lib/common.py and evals/setup/reset.py, "
+                         "which only exist in commit e1fe575 (pre-squash PR #33) and are not on skills")
+    BASELINE = None
 
 
 def verify_no_change():
@@ -56,7 +74,32 @@ MODES = {
 }
 
 
+# --------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# The CLI above (python3 verify.py no-change) is unchanged.
+
+def verify(scenario, setup_result, environment):
+    """SYSTEM result: the cluster snapshot matches the setup baseline (read-only skill)."""
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    if _DEPENDENCY_ERROR:
+        return inconclusive("dependency_missing", _DEPENDENCY_ERROR)
+    out = io.StringIO()
+    try:
+        with envlib.kube_env(environment or {}), contextlib.redirect_stdout(out):
+            code = verify_no_change()
+    except SystemExit as exc:          # common.die()
+        return inconclusive("verification_error", f"verify stopped (exit {exc.code})")
+    ref = [str(setup_result.get("baseline_ref"))]
+    if code == 0:
+        return CheckResult.from_findings([Finding("cluster_unchanged", "PASS", "cluster matches the baseline", ref)])
+    return CheckResult.from_findings([Finding("cluster_unchanged", "FAIL", out.getvalue()[-2000:], ref)])
+
+
 def main():
+    if _DEPENDENCY_ERROR:
+        print(f"ERROR: {_DEPENDENCY_ERROR}", file=sys.stderr)
+        sys.exit(2)
     if len(sys.argv) != 2 or sys.argv[1] not in MODES:
         print(f"usage: {sys.argv[0]} <mode>", file=sys.stderr)
         print(f"modes: {', '.join(MODES)}", file=sys.stderr)

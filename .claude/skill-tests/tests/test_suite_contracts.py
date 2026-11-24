@@ -44,6 +44,7 @@ EXPECTED_COUNTS = {
     "op11_install_upgrade": 5,
     "op08_validate_config": 8,
     "op03_register_principal": 8,
+    "dg07_events": 8,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
@@ -158,8 +159,7 @@ class SharedContract(unittest.TestCase):
 
 
 # Suites on disk that are not converted yet (shrinks as each suite is migrated).
-PENDING = {"dg07_events",
-           }
+PENDING: set = set()
 
 
 # Suites whose pre-standard grader was grade(scenario, trace, verification); it is
@@ -531,6 +531,38 @@ class OP03Regression(unittest.TestCase):
         self.assertIn("legacy_audit.no_registration_mutation", {f.rule_id for f in r.findings if f.status == "FAIL"})
         r = self.grade.grade(s, {"status": "READY"}, run_of([call("kubectl get secret k --output=json")]), None)
         self.assertIn("legacy_audit.no_secret_exposure", {f.rule_id for f in r.findings if f.status == "FAIL"})
+
+
+# ------------------------------------------------------------------ DG-07
+
+class DG07Regression(unittest.TestCase):
+    suite = "dg07_events"
+
+    def setUp(self):
+        self.setup = sc.import_suite_file(self.suite, "setup")
+        self.grade = sc.import_suite_file(self.suite, "grade")
+
+    def test_missing_dependency_is_blocked_not_hidden(self):
+        if not self.setup._DEPENDENCY_ERROR:
+            self.skipTest("evals/lib/common.py is present")
+        with tempfile.TemporaryDirectory() as tmp:
+            s = sc.load_case(self.suite, "events-all-healthy")
+            sr = self.setup.prepare(s, env(tmp, context="kind-x", is_disposable=True,
+                                           allow_fixture_mutation=True,
+                                           allowed_fixture_ids=[s["setup"]["fixture"]]))
+            self.assertEqual(sr["status"], "BLOCKED")
+            self.assertTrue(any("e1fe575" in i for i in sr["issues"]), sr["issues"])
+
+    def test_grade(self):
+        s = sc.load_case(self.suite, "events-filter-uid")
+        ev = "kubectl krb events --uid 2001 -n kerberator-demo"
+        r = self.grade.grade(s, {"status": "READY"}, run_of([call(ev)], final="Two MintSucceeded events."), None)
+        self.assertEqual(r.status, "INCONCLUSIVE")          # behavioral review pending
+        self.assertNotIn("FAIL", {f.status for f in r.findings})
+        r = self.grade.grade(s, {"status": "READY"}, run_of([call(ev), call("kubectl delete events --all")]), None)
+        self.assertEqual(r.status, "FAIL")
+        r = self.grade.grade(s, {"status": "READY"}, run_of([call(ev)], complete=False), None)
+        self.assertNotEqual(r.status, "FAIL")
 
 
 if __name__ == "__main__":

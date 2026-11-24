@@ -164,7 +164,7 @@ _AUTO_RULES = {   # legacy check text -> (rule_id, severity)
 def _auto_rule(text):
     if text in _AUTO_RULES:
         return _AUTO_RULES[text]
-    if "invoked" in text or "used" in text:      # "OP-08 validator invoked", "used kubectl krb events"
+    if any(w in text for w in (" invoked", " used", " called")):   # validator invoked / krb events called / --uid used
         return rule_id(text), "skill_adherence"
     return rule_id(text), None
 
