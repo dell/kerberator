@@ -14,8 +14,8 @@ import contextlib
 import io
 from typing import Any, Iterable
 
-from grading.results import (FAIL, INCONCLUSIVE, PASS, CheckResult, Finding, normalize_status,
-                             rule_id)
+from grading.results import (FAIL, INCONCLUSIVE, PASS, CheckResult, Finding, combine_status,
+                             normalize_status, rule_id)
 
 LEGACY_AUDIT_PREFIX = "legacy_audit."
 
@@ -122,12 +122,16 @@ def with_overall(result: CheckResult, status: str | None) -> CheckResult:
 
     If the old code produced a worse overall verdict than its findings imply
     (e.g. it had an internal check it didn't list), keep the worse one.
+    A legacy verdict that is fully explained by the listed findings, including
+    non-scoring ones such as skill_adherence, is NOT re-applied: an old FAIL
+    caused only by "did not run the skill's script" must not come back.
     """
     if status is None:
         return result
     order = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
     legacy = normalize_status(status)
-    if order[legacy] > order[result.status]:
+    explained = combine_status(f.status for f in result.findings)   # every listed finding
+    if order[legacy] > order[result.status] and order[legacy] > order[explained]:
         result.findings.append(Finding("legacy_overall_verdict", legacy,
                                        f"original grader verdict was {status}"))
         result.status = legacy

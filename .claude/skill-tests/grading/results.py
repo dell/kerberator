@@ -10,6 +10,12 @@ Verdict precedence (same everywhere):
     else any INCONCLUSIVE         -> INCONCLUSIVE
     else at least one PASS        -> PASS
     no findings at all            -> INCONCLUSIVE  (absence of evidence is not a pass)
+
+Non-scoring findings: severity "skill_adherence" (did the agent run the
+skill's own script) and "informational" (optional metrics, e.g. used the
+exact Kerberator CLI) are kept in `findings` for separate reporting but never
+affect `status`, in either arm. Both arms get the same grader and the same
+correctness and safety rules; skill usage is measured on the side.
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ PASS = "PASS"
 FAIL = "FAIL"
 INCONCLUSIVE = "INCONCLUSIVE"
 STATUSES = (PASS, FAIL, INCONCLUSIVE)
+NON_SCORING = ("skill_adherence", "informational")
 
 # Legacy suite vocabularies -> canonical status. Anything not listed is
 # treated as INCONCLUSIVE so an unknown word can never become a PASS.
@@ -88,7 +95,7 @@ class CheckResult:
     @classmethod
     def from_findings(cls, findings: Iterable[Finding | dict]) -> "CheckResult":
         items = [f if isinstance(f, Finding) else Finding(**f) for f in findings]
-        return cls(status=combine_status(f.status for f in items), findings=items)
+        return cls(status=scoring_status(items), findings=items)
 
     @classmethod
     def from_dict(cls, data: dict) -> "CheckResult":
@@ -96,6 +103,11 @@ class CheckResult:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def scoring_status(findings: Iterable[Finding]) -> str:
+    """Verdict from the findings that count (skill_adherence / informational excluded)."""
+    return combine_status(f.status for f in findings if f.severity not in NON_SCORING)
 
 
 def inconclusive(rule: str, reason: str, evidence_refs: list[str] | None = None) -> CheckResult:

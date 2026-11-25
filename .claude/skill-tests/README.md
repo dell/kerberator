@@ -73,8 +73,12 @@ the one `reply`. `harness.scenario.load_case()` fills in defaults.
 - `severity` values:
   - `critical`: interim command-safety findings, named `legacy_audit.*`. These move to
     `grading/common.py` when it exists.
-  - `skill_adherence`: checks that only make sense in the skill-on arm, such as
-    "ran the skill's script".
+  - `skill_adherence`: "ran the skill's own script" (OP-01 `inspect.py`, OP-08
+    `validate.py`, DG-02 `collect.py`). Reported, but **never counted** toward the status.
+  - `informational`: optional metrics such as "used the exact Kerberator CLI" (DG-07).
+    Also never counted.
+  - Both arms (skill / no-skill) use the same grader and the same correctness and safety
+    rules; `grade()` does not know which arm it is grading.
 - Human review: diagnostic suites write `review-template.json` next to the baseline in
   `artifact_dir`. Copy it to `review.json` and fill in true or false. Any item left
   unreviewed stays INCONCLUSIVE.

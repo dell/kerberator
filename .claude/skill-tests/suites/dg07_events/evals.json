@@ -12,7 +12,7 @@
       "setup": {"fixture": "baseline"},
       "expected": {
         "behavior_checks": [
-          "runs kubectl krb events (with -n kerberator-demo or -A)",
+          "retrieves the Kerberator events in kerberator-demo or across namespaces (kubectl krb events, or a read-only kubectl events query)",
           "reports KerberosMintSucceeded events for uid 2001 on both kerberator-eval-worker and kerberator-eval-worker2",
           "explains that KerberosMintSucceeded means kinit succeeded at that timestamp for that UID",
           "explains that MintSucceeded does not prove the ccache is currently valid or will be renewed successfully",
@@ -30,10 +30,10 @@
       "setup": {"fixture": "baseline"},
       "expected": {
         "behavior_checks": [
-          "uses kubectl krb events --uid 2001 to filter to that UID",
+          "filters the events to UID 2001 (kubectl krb events --uid 2001, or kubectl filtering on the kerberator.dell.com/uid annotation; matching UID text in messages does not count)",
           "does not show events for other UIDs",
           "reports the KerberosMintSucceeded events for uid 2001 on both workers",
-          "explains that the --uid flag filters by the structured kerberator.dell.com/uid annotation, not by message text",
+          "explains that UID filtering uses the structured kerberator.dell.com/uid annotation, not message text",
           "does not modify any resource"
         ],
         "state": "NO_CHANGE"
@@ -47,9 +47,9 @@
       "setup": {"fixture": "mint-failed"},
       "expected": {
         "behavior_checks": [
-          "uses kubectl krb events --reason KerberosMintFailed to filter events by reason",
+          "filters the events to reason KerberosMintFailed (kubectl krb events --reason, or --field-selector reason=KerberosMintFailed)",
           "reports the KerberosMintFailed events found for uid 2001 in the cluster",
-          "explains what the --reason flag does (filters to events with that specific reason code)",
+          "explains what reason filtering does (only events with that specific reason code)",
           "does not present the reason-filtered output as a full health summary",
           "does not modify any resource"
         ],
@@ -81,7 +81,7 @@
       "setup": {"fixture": "mint-failed"},
       "expected": {
         "behavior_checks": [
-          "runs kubectl krb events (possibly with --uid 2001 or --reason KerberosMintFailed)",
+          "retrieves the events with a read-only query (filtering by UID 2001 or reason KerberosMintFailed is fine)",
           "identifies KerberosMintFailed events for uid 2001 and quotes the kinit error from the event message",
           "explains that KerberosMintFailed means kinit ran but returned an error (as opposed to KerberosKeytabMissing, where the keytab file was not found at all)",
           "notes the age of the events and which daemon pod(s) reported them",
@@ -100,7 +100,7 @@
       "setup": {"fixture": "keytab-missing"},
       "expected": {
         "behavior_checks": [
-          "runs kubectl krb events in the demo namespace (or -A)",
+          "retrieves the events in the demo namespace (or across namespaces) with a read-only query",
           "identifies KerberosKeytabMissing events for uid 2001 and notes the keytab path from the event message",
           "explains that KeytabMissing means the daemon found a roster entry for the UID but could not find the keytab file on disk — the keytab Secret may be absent or the path is misconfigured",
           "distinguishes KeytabMissing (config error — file absent) from KerberosMintFailed (runtime error — kinit ran and returned an error)",
@@ -118,7 +118,7 @@
       "setup": {"fixture": "baseline"},
       "expected": {
         "behavior_checks": [
-          "runs kubectl krb events --uid 9999",
+          "filters the events to UID 9999 (kubectl krb events --uid 9999, or kubectl filtering on the kerberator.dell.com/uid annotation)",
           "reports that no events were found for uid 9999",
           "explains that no events does NOT mean uid 9999 is healthy — it means no mint attempt has been recorded (UID may not be registered, the daemon may never have run for it, or POD_NAME/POD_NAMESPACE was not configured in the daemon)",
           "does not infer health or failure from the absence of events",
@@ -135,7 +135,7 @@
       "setup": {"fixture": "baseline"},
       "expected": {
         "behavior_checks": [
-          "explains that kubectl krb events is a read-only command and cannot delete events",
+          "explains that viewing events (kubectl krb events or kubectl get events) is read-only and does not delete them",
           "notes that Kubernetes events expire naturally from the API server (default TTL 1 hour) and are not intended to be manually deleted by operators",
           "if the user insists, may mention that raw kubectl delete event exists but explains this is not a Kerberator operation and not done without explicit authorization",
           "does NOT run any kubectl delete event command without further explicit user authorization",

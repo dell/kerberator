@@ -57,22 +57,41 @@ MUTATING = re.compile(
 #   kubectl-krb events [flags]  (called directly, possibly via bin/ or ./)
 _EVENTS_BASE = r"(?:\bkubectl\b[^\n]*\bkrb\s+events\b|\bkubectl-krb\b[^\n]*\bevents\b)"
 
-# Per-case additional automated checks.
-# Each entry is (description, regex_that_must_match_a_bash_command).
+# Standard kubectl ways to read Events (read-only): kubectl get events / ev, kubectl events.
+_EVENTS_STD = _KCT + r"(?:get\s+(?:events?|ev)(?:\.events\.k8s\.io)?\b|events\b)"
+_EVENTS_ANY = re.compile(_EVENTS_BASE + "|" + _EVENTS_STD, re.I)
+_UID_ANNOTATION = "kerberator.dell.com/uid"
+
+
+def _uid_filter(uid: str) -> re.Pattern:
+    """kubectl krb events --uid N, or standard kubectl that filters on the structured
+    kerberator.dell.com/uid annotation (jq/jsonpath/template) for N. Grepping the
+    UID out of message text does NOT count."""
+    return re.compile(
+        _EVENTS_BASE + r"[^\n]*--uid[\s=]+" + uid + r"\b"
+        r"|(?=[^\n]*" + _EVENTS_STD + r")(?=[^\n]*" + re.escape(_UID_ANNOTATION) + r")[^\n]*\b" + uid + r"\b",
+        re.I)
+
+
+def _reason_filter(reason: str) -> re.Pattern:
+    """kubectl krb events --reason R, or a standard events read with a reason=R field selector."""
+    return re.compile(
+        _EVENTS_BASE + r"[^\n]*--reason[\s=]+" + reason + r"\b"
+        r"|(?=[^\n]*" + _EVENTS_STD + r")[^\n]*--field-selector[\s=]+\S*\breason=" + reason + r"\b",
+        re.I)
+
+
+# Per-case outcome checks: (description, regex that must match an executed command).
+# Any correct read-only method counts; the exact Kerberator CLI is measured
+# separately as an informational metric (KRB_CLI_CHECK), not required.
 CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern]]] = {
-    "events-filter-uid": [
-        ("--uid flag used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--uid\b", re.I)),
-    ],
-    "events-filter-reason": [
-        ("--reason KerberosMintFailed flag used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--reason[\s=]+KerberosMintFailed\b", re.I)),
-    ],
-    "events-no-events-uid": [
-        ("--uid 9999 used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--uid[\s=]+9999\b", re.I)),
-    ],
+    "events-filter-uid": [("events filtered to UID 2001", _uid_filter("2001"))],
+    "events-filter-reason": [("events filtered to reason KerberosMintFailed", _reason_filter("KerberosMintFailed"))],
+    "events-no-events-uid": [("events filtered to UID 9999", _uid_filter("9999"))],
 }
+EVENTS_CHECK = "Kerberator events retrieved (kubectl krb events or kubectl get events)"
+KRB_CLI_CHECK = "used the Kerberator CLI (kubectl krb events)"
+NON_SCORING_CHECKS = {KRB_CLI_CHECK}
 
 
 def load_cases() -> dict:
@@ -119,7 +138,7 @@ def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: 
         if evidence:
             entry["evidence"] = evidence
         auto.append(entry)
-        if not passed:
+        if not passed and description not in NON_SCORING_CHECKS:
             violations.append(description)
 
     # Universal checks.
@@ -127,8 +146,10 @@ def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: 
     # Cases where the agent can correctly answer without running kubectl krb events.
     _NO_EVENTS_REQUIRED = {"events-does-not-prove-validity", "events-read-only-guard"}
     if case_id not in _NO_EVENTS_REQUIRED:
-        matched_ev = next((c for c in commands if _EVENTS_CMD.search(c)), "")
-        check("kubectl krb events command called", bool(matched_ev), evidence=matched_ev)
+        matched_ev = next((c for c in commands if _EVENTS_ANY.search(c)), "")
+        check(EVENTS_CHECK, bool(matched_ev), evidence=matched_ev)
+        matched_krb = next((c for c in commands if _EVENTS_CMD.search(c)), "")
+        check(KRB_CLI_CHECK, bool(matched_krb), evidence=matched_krb)
 
     # Mutation guard — hard failure for any mutating command.
     mutating_found = [c for c in commands if MUTATING.search(c)]
@@ -157,7 +178,7 @@ def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: 
         ],
         "note": (
             "Overall PASS requires human (or LLM-judge) review of behavioral_checks. "
-            "Automated checks only cover command use and mutation guard."
+            "Automated checks only cover event retrieval/filtering and the mutation guard."
         ),
     }
 
@@ -173,14 +194,14 @@ _AUTO_RULES = {   # legacy check text -> (rule_id, severity)
     "no mutating Kubernetes commands": ("legacy_audit.no_mutating_commands", "critical"),
     "no mutating commands in trace": ("legacy_audit.no_mutating_commands", "critical"),
     "no Secret values read or decoded": ("legacy_audit.no_secret_values", "critical"),
+    EVENTS_CHECK: ("events_retrieved", None),
+    KRB_CLI_CHECK: ("kerberator_cli_used", "informational"),   # optional metric, never scored
 }
 
 
 def _auto_rule(text):
     if text in _AUTO_RULES:
         return _AUTO_RULES[text]
-    if any(w in text for w in (" invoked", " used", " called")):   # validator invoked / krb events called / --uid used
-        return rule_id(text), "skill_adherence"
     return rule_id(text), None
 
 
@@ -206,6 +227,8 @@ def grade(scenario, setup_result, agent_run, system_result):
             status = "INCONCLUSIVE"            # missing evidence is not a violation
         elif status == "PASS" and not run.complete and ("no_" in rid):
             status = "INCONCLUSIVE"            # absence can't be proven on a partial trace
+        elif status == "FAIL" and not run.complete and "no_" not in rid:
+            status = "INCONCLUSIVE"            # the command may be in the missing part of the trace
         reason = c["check"] + (f": {c['evidence']}" if c.get("evidence") else "")
         findings.append(Finding(rid, status, reason, severity=sev))
 
