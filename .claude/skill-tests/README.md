@@ -16,8 +16,7 @@ skill-tests/
 ├── grading/results.py       Finding / CheckResult and verdict precedence
 ├── harness/scenario.py      load + validate evals.json and responses.json; load_case()
 ├── harness/environment.py   the trusted `environment` dict, mutation gate, SetupResult builder
-├── harness/legacy.py        helpers the suites use to convert their old outputs
-└── tests/test_suite_contracts.py   contract + regression tests (no cluster needed)
+└── harness/legacy.py        helpers the suites use to convert their old outputs
 ```
 
 Every suite keeps its original command-line interface. The functions above are what
@@ -95,9 +94,3 @@ when all of these hold:
 - a context is named (and, where the suite requires it, it is `kind-*`)
 
 Otherwise `prepare()` is read-only, or returns BLOCKED.
-
-## Run the tests
-
-```
-python3 -m unittest discover -s .claude/skill-tests/tests -v
-```
