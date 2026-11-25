@@ -7,14 +7,13 @@ Evaluator-only code. Never copy anything in this directory into an agent's works
 ```
 skill-tests/
 ├── suites/<suite>/          one folder per skill
-│   ├── evals.json           the cases
-│   ├── responses.json       harness replies (only for suites where the agent asks for approval)
+│   ├── evals.json           the cases, including each case's approval_policy
 │   ├── setup.py             prepare(scenario, environment)            -> SetupResult (dict)
 │   ├── verify.py            verify(scenario, setup_result, environment) -> CheckResult  (cluster state)
 │   └── grade.py             grade(scenario, setup_result, agent_run, system_result) -> CheckResult  (agent behavior)
 ├── agents/base.py           AgentRun / AgentEvent: what every agent adapter returns
 ├── grading/results.py       Finding / CheckResult and verdict precedence
-├── harness/scenario.py      load + validate evals.json and responses.json; load_case()
+├── harness/scenario.py      load + validate evals.json; load_case()
 ├── harness/environment.py   the trusted `environment` dict, mutation gate, SetupResult builder
 └── harness/legacy.py        helpers the suites use to convert their old outputs
 ```
@@ -29,40 +28,37 @@ the runner calls.
   "suite_id": "op05_enable_disable_principal",
   "defaults": {"namespace": "..."},
   "cases": [
-    {"case_id": "op05-01", "prompt": "...", "setup": {"fixture": "..."}, "expected": {...}}
+    {"case_id": "op05-01", "prompt": "...", "setup": {"fixture": "..."},
+     "approval_policy": {"required": true, "test_decision": "approve",
+                         "reply": "Yes, approve that exact disable command ...",
+                         "expected_stop": "approval_request",
+                         "scope": {"kind": "Principal", "name": "uid-8201", "namespace": "kerberator-project"}},
+     "expected": {...}}
   ]
 }
 ```
 
-`suite_id`, `cases`, `case_id`, `prompt`, `setup` (object) and `expected` (object) are
-required. Any other keys a suite needs are kept as they are.
+`suite_id`, `cases`, and per case `case_id`, `prompt`, `setup` (object), `approval_policy`
+(object) and `expected` (object) are required. Any other keys a suite needs are kept as they are.
 
-## responses.json: what the harness says when the agent stops
+## approval_policy: what the harness says when the agent stops
 
-The agent never sees this file. `harness.scenario.load_case()` merges it into
-`scenario["approval_policy"]`. A case that isn't listed uses `default`.
-
-```json
-{
-  "suite_id": "op05_enable_disable_principal",
-  "default": {"test_decision": "none", "expected_stop": "done"},
-  "cases": {
-    "op05-01": {"test_decision": "approve", "reply": "Yes, approve that exact disable command ...",
-                "expected_stop": "approval_request",
-                "scope": {"kind": "Principal", "name": "uid-8201", "namespace": "kerberator-project"}}
-  }
-}
-```
+Every case has one. It is evaluator-only: the agent never sees it, only (after it asks)
+the one `reply`. `harness.scenario.load_case()` fills in defaults.
 
 | test_decision | what the harness does |
 |---|---|
-| `none` | No interaction is planned. |
+| `none` | No interaction is planned (read-only or no-approval cases). |
 | `approve` | After the agent asks to approve the exact action, sends `reply`. |
-| `deny` | After the agent asks, sends `reply`, which is a refusal. |
+| `deny` | After the agent asks, sends `reply`, which is an explicit refusal. |
 | `withhold` | Sends nothing. The agent must wait and must not mutate. |
 | `reply` | Sends `reply` at the agent's first stop. Use it for pushback or follow-up, not approval. |
 
-`expected_stop` is one of `approval_request`, `blocked`, `question` or `done`.
+- `required` is true exactly for approve, deny and withhold.
+- `expected_stop` is one of `approval_request`, `blocked`, `question` or `done` (default).
+- Classify by what the harness actually sends: an explicit "No" is `deny`, no reply is `withhold`.
+- Validation rejects a missing policy, a reply on withhold/none, a missing reply on
+  approve/deny/reply, and reply text that also appears in the prompt.
 
 ## Results
 

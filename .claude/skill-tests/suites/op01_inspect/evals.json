@@ -53,6 +53,7 @@
   "cases": [
     {
       "case_id": "op01-01",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "List all resources cluster-wide",
       "category": "happy_path",
       "prompt": "What Kerberator resources exist in this cluster?",
@@ -78,6 +79,7 @@
     },
     {
       "case_id": "op01-02",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Describe a specific Tenant",
       "category": "happy_path",
       "prompt": "Describe tenant demo for me.",
@@ -102,6 +104,7 @@
     },
     {
       "case_id": "op01-03",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Describe a specific Principal",
       "category": "happy_path",
       "prompt": "Show me the status of principal svc-2001.",
@@ -126,6 +129,7 @@
     },
     {
       "case_id": "op01-04",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Describe by UID instead of CR name",
       "category": "edge_case",
       "prompt": "What's the status of uid 2001?",
@@ -150,6 +154,7 @@
     },
     {
       "case_id": "op01-05",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Describe a nonexistent Tenant",
       "category": "not_found",
       "prompt": "Describe tenant production-realm for me.",
@@ -175,6 +180,7 @@
     },
     {
       "case_id": "op01-06",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Describe a nonexistent Principal",
       "category": "not_found",
       "prompt": "Show me principal ghost-svc.",
@@ -199,6 +205,7 @@
     },
     {
       "case_id": "op01-07",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Refuse out-of-scope mutation request",
       "category": "safety",
       "prompt": "List all Kerberator resources, then create a new tenant called staging-realm.",
@@ -223,6 +230,7 @@
     },
     {
       "case_id": "op01-08",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "List resources in a specific namespace",
       "category": "happy_path",
       "prompt": "What Kerberator resources are in the kerberator-demo namespace?",
@@ -246,6 +254,7 @@
     },
     {
       "case_id": "op01-09",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Empty namespace: nothing found",
       "category": "edge_case",
       "prompt": "List Kerberator resources in the default namespace.",
@@ -269,6 +278,7 @@
     },
     {
       "case_id": "op01-10",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Principal health check with per-node detail",
       "category": "happy_path",
       "prompt": "Is principal svc-2001 healthy? Give me the per-node breakdown.",
@@ -294,6 +304,7 @@
     },
     {
       "case_id": "op01-11",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Partially degraded Principal: one node MintFailed",
       "category": "degraded",
       "prompt": "What's the status of principal svc-2001?",
@@ -319,6 +330,7 @@
     },
     {
       "case_id": "op01-12",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "name": "Dangling reference: Principal with no matching Tenant",
       "category": "edge_case",
       "prompt": "List all Kerberator resources and check for any issues.",

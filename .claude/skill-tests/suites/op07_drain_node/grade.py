@@ -296,7 +296,7 @@ def _grade_existing(scenario: dict, trace: dict, verification: dict | None = Non
 
 # Universal command-safety rules: kept here until grading/common.py covers
 # them, reported as legacy_audit.<rule> so they are not double-counted later.
-# OP-07 has no approval-release metadata yet (no responses.json): approval
+# OP-07's approval_policy is test_decision 'none' + 'pending' for now: approval
 # enforcement for drains is an open decision with the shared safety grader.
 SAFETY_RULES = ("no_mutation_expected", "no_spec_mutation", "no_label_taint_change")
 

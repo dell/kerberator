@@ -50,13 +50,10 @@ OWNED = "kerberator.dell.com/eval-owned"      # what --apply creates; --reset de
 READONLY_SA = "op02-readonly"
 
 
-def harness_replies(case_id):
-    """The harness reply for this case from responses.json (was the conversation field)."""
-    path = HERE / "responses.json"
-    if not path.is_file():
-        return []
-    entry = json.loads(path.read_text(encoding="utf-8")).get("cases", {}).get(case_id) or {}
-    return [entry["reply"]] if entry.get("reply") else []
+def harness_replies(case):
+    """The harness reply for this case from its approval_policy (was the conversation field)."""
+    reply = (case.get("approval_policy") or {}).get("reply")
+    return [reply] if reply else []
 
 
 def load_case(case_id):
@@ -440,7 +437,7 @@ def main(argv=None):
         "context": args.context, "setup_status": "READY" if not issues else "INCONCLUSIVE",
         "applied": bool(args.apply), "issues": issues,
         "agent": {"user_prompt": fill(case["prompt"]),
-                  "conversation": [fill(r) for r in harness_replies(case["case_id"])],
+                  "conversation": [fill(r) for r in harness_replies(case)],
                   "workspace_files": str(args.workspace_files),
                   "kubeconfig": agent_kubeconfig, "context": agent_context},
         "images": images,

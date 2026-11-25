@@ -649,9 +649,7 @@ def main() -> None:
     matching = [s for s in spec.get("cases", []) if s.get("case_id") == a.scenario]
     if len(matching) != 1:
         parser.error(f"unknown/duplicate scenario: {a.scenario}")
-    responses = Path(a.evals).with_name("responses.json")
-    if responses.is_file():   # approval policy lives in responses.json, not evals.json
-        matching[0]["approval_policy"] = approval_policy(load(responses), a.scenario)
+    matching[0]["approval_policy"] = approval_policy(matching[0].get("approval_policy"))
     result = _grade_existing(matching[0], load(a.trace),
                    load(a.verification) if a.verification else None,
                    load(a.baseline) if a.baseline else None)

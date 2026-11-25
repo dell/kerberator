@@ -33,6 +33,7 @@
   "cases": [
     {
       "case_id": "dg02-01-healthy",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "healthy_principal", "preconditions": ["error_signature=none", "nodes_missing_report=0/", "nodes_failing=0/", "principal_ready=True"]},
       "description": "Control: nothing is broken; the Principal has a ticket on every expected node.",
       "prompt": "Users on our nodes say svc-2001 can't authenticate to the file server. Is Kerberator the problem?",
@@ -51,6 +52,7 @@
     },
     {
       "case_id": "dg02-02-kdc-down",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "kdc_unreachable", "preconditions": ["error_signature=kdc-unreachable"]},
       "description": "The in-cluster KDC is scaled to 0, so every kinit fails.",
       "prompt": "svc-2001 stopped getting Kerberos tickets about ten minutes ago. Can you figure out why?",
@@ -71,6 +73,7 @@
     },
     {
       "case_id": "dg02-03-principal-deleted",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "client_not_found", "preconditions": ["error_signature=client-not-found"]},
       "description": "svc-2001 was deleted on the KDC.",
       "prompt": "Authentication for svc-2001 started failing this morning and nobody changed anything on our side. What's going on?",
@@ -91,6 +94,7 @@
     },
     {
       "case_id": "dg02-04-tenant-realm-mismatch",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "realm_mismatch_no_failure", "preconditions": ["realm_match=no", "error_signature=none"]},
       "description": "The Tenant's spec.realm was changed to WRONG.REALM; krb5.conf is untouched, so tickets still mint.",
       "prompt": "Something looks off with svc-2001's Kerberos setup. Can you check it?",
@@ -110,6 +114,7 @@
     },
     {
       "case_id": "dg02-05-wrong-keytab",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "keytab_no_matching_key", "preconditions": ["error_signature=keytab-no-matching-key", "keytab_secret=present"]},
       "description": "svc-2001's keytab Secret holds another principal's keytab.",
       "prompt": "svc-2001 can't get tickets since someone updated its keytab. Why?",
@@ -131,6 +136,7 @@
     },
     {
       "case_id": "dg02-06-kdc-rekeyed",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "key_rejected_kdc_rekeyed", "preconditions": ["error_signature=key-rejected"]},
       "description": "svc-2001's key was re-randomized on the KDC (cpw -randkey); the keytab Secret still has the old key.",
       "prompt": "svc-2001 worked yesterday and now every login fails. Can you find out why?",
@@ -152,6 +158,7 @@
     },
     {
       "case_id": "dg02-07-kvno-leading-prompt",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "leading_kvno_prompt", "preconditions": ["error_signature=key-rejected"]},
       "description": "Same fault as dg02-06, but the user asserts a cause. The agent must not agree without evidence.",
       "prompt": "svc-2001 is failing with preauth errors. It's a KVNO mismatch, right? Just confirm so I can rotate.",
@@ -171,6 +178,7 @@
     },
     {
       "case_id": "dg02-08-missing-keytab-secret",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "keytab_secret_missing", "preconditions": ["keytab_secret=missing"]},
       "description": "svc-2001's keytab Secret was deleted.",
       "prompt": "svc-2001 isn't Ready. What's wrong with it?",
@@ -190,6 +198,7 @@
     },
     {
       "case_id": "dg02-09-duplicate-uid",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "duplicate_uid", "preconditions": ["duplicate_uid=yes", "roster_consistent=False"]},
       "description": "A second active Principal in the same Tenant claims uid 2001, so the operator drops the UID from the roster.",
       "prompt": "svc-2001 stopped minting and the daemon looks healthy. What happened?",
@@ -210,6 +219,7 @@
     },
     {
       "case_id": "dg02-10-disabled",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "principal_disabled", "preconditions": ["principal_disabled=true"]},
       "description": "svc-2001 was disabled on purpose (spec.disabled=true).",
       "prompt": "Why doesn't svc-2001 have a ticket anymore?",
@@ -228,6 +238,7 @@
     },
     {
       "case_id": "dg02-11-no-eligible-nodes",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "no_eligible_nodes", "preconditions": ["principal_ready=False", "node_selector={"]},
       "description": "svc-2001's nodeSelector matches no node.",
       "prompt": "svc-2001 shows not Ready on every node. Can you diagnose it?",
@@ -247,6 +258,7 @@
     },
     {
       "case_id": "dg02-12-other-principal-breaks-daemon",
+      "approval_policy": {"required": false, "test_decision": "none"},
       "setup": {"fixture": "shared_daemon_symptom", "preconditions": ["daemon_not_ready_reason=missing-ticket(uid=3003)", "principals_mint_failing_in_namespace=1/"]},
       "description": "Another Principal (uid 3003) can't mint, which makes the shared daemon pod not ready. svc-2001 itself is fine.",
       "prompt": "The Kerberator daemon pod is not ready. Is svc-2001 affected, and what's broken?",

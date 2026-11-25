@@ -1,11 +1,11 @@
-"""Load and validate suite scenarios (evals.json + optional responses.json).
+"""Load and validate suite scenarios (evals.json).
 
-evals.json   -> what the case is: suite_id, defaults, cases[case_id, prompt, setup, expected, ...]
-responses.json (approval-gated suites only) -> how the harness answers when the
-             agent stops: per-case test_decision, reply text, expected stop.
+evals.json -> suite_id, defaults, cases[case_id, prompt, setup, approval_policy, expected, ...]
 
-Both files are evaluator-only. The agent sees scenario["prompt"] and, after it
-stops for approval, at most the one harness reply; nothing else.
+Every case carries an approval_policy: how the harness answers when the agent
+stops (test_decision none/approve/deny/withhold/reply, the reply text, the
+expected stop). It is evaluator-only. The agent sees scenario["prompt"] and,
+after it stops for approval, at most the one harness reply; nothing else.
 
 load_case() returns one normalized scenario dict that the runner passes to
 setup.prepare(), verify.verify() and grade.grade():
@@ -24,6 +24,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 SUITES_DIR = Path(__file__).resolve().parents[1] / "suites"
 
@@ -31,6 +32,7 @@ DECISIONS = ("none", "approve", "deny", "withhold", "reply")
 STOPS = ("approval_request", "blocked", "question", "done")
 UNEXPECTED = ("withhold", "deny")
 NEEDS_REPLY = ("approve", "deny", "reply")
+REQUIRES_APPROVAL = ("approve", "deny", "withhold")
 _DEFAULT_POLICY = {"test_decision": "none", "expected_stop": "done",
                    "max_requests": 1, "on_unexpected_request": "withhold"}
 
@@ -87,80 +89,73 @@ def validate_evals(spec: dict, where: str = "evals.json") -> list[str]:
             problems.append(f"{tag} ({cid}): setup must be an object")
         if not isinstance(case.get("expected"), dict) or not case.get("expected"):
             problems.append(f"{tag} ({cid}): expected must be a non-empty object")
+        problems += validate_policy(case.get("approval_policy"), case.get("prompt"), f"{tag} ({cid})")
     return problems
 
 
-def validate_responses(responses: dict, case_ids: set[str], where: str = "responses.json") -> list[str]:
-    problems: list[str] = []
-    entries = responses.get("cases", {})
-    if not isinstance(entries, dict):
-        return [f"{where}: 'cases' must be an object keyed by case_id"]
-    default = responses.get("default", {})
-    for cid, entry in [("<default>", default), *entries.items()]:
-        tag = f"{where}: {cid}"
-        if cid != "<default>" and cid not in case_ids:
-            problems.append(f"{tag}: case_id not in evals.json")
-        if not isinstance(entry, dict):
-            problems.append(f"{tag}: must be an object")
-            continue
-        merged = {**_DEFAULT_POLICY, **default, **entry}
-        d = merged["test_decision"]
-        if d not in DECISIONS:
-            problems.append(f"{tag}: test_decision {d!r} not in {DECISIONS}")
-        if merged["expected_stop"] not in STOPS:
-            problems.append(f"{tag}: expected_stop {merged['expected_stop']!r} not in {STOPS}")
-        if merged["on_unexpected_request"] not in UNEXPECTED:
-            problems.append(f"{tag}: on_unexpected_request must be one of {UNEXPECTED}")
-        if d in NEEDS_REPLY and cid != "<default>" and not (isinstance(entry.get("reply"), str) and entry["reply"].strip()):
-            problems.append(f"{tag}: test_decision {d!r} needs a non-empty reply")
-        if d in ("withhold", "none") and entry.get("reply"):
-            problems.append(f"{tag}: test_decision {d!r} must not carry a reply")
-        if d in ("approve", "deny", "withhold") and merged["expected_stop"] != "approval_request":
-            problems.append(f"{tag}: {d!r} implies expected_stop 'approval_request'")
+def validate_policy(policy: Any, prompt: Any, tag: str) -> list[str]:
+    """Problems with one case's approval_policy (empty == valid)."""
+    if not isinstance(policy, dict):
+        return [f"{tag}: approval_policy must be an object (use test_decision 'none' if no approval is planned)"]
+    problems = []
+    merged = {**_DEFAULT_POLICY, **policy}
+    d = merged["test_decision"]
+    if d not in DECISIONS:
+        problems.append(f"{tag}: test_decision {d!r} not in {DECISIONS}")
+    if merged["expected_stop"] not in STOPS:
+        problems.append(f"{tag}: expected_stop {merged['expected_stop']!r} not in {STOPS}")
+    if merged["on_unexpected_request"] not in UNEXPECTED:
+        problems.append(f"{tag}: on_unexpected_request must be one of {UNEXPECTED}")
+    reply = policy.get("reply")
+    if d in NEEDS_REPLY and not (isinstance(reply, str) and reply.strip()):
+        problems.append(f"{tag}: test_decision {d!r} needs a non-empty reply")
+    if d in ("withhold", "none") and reply:
+        problems.append(f"{tag}: test_decision {d!r} must not carry a reply")
+    if d in ("approve", "deny", "withhold") and merged["expected_stop"] != "approval_request":
+        problems.append(f"{tag}: {d!r} implies expected_stop 'approval_request'")
+    if "required" in policy and policy["required"] is not (d in REQUIRES_APPROVAL):
+        problems.append(f"{tag}: required must be {d in REQUIRES_APPROVAL} for test_decision {d!r}")
+    if isinstance(reply, str) and reply.strip() and isinstance(prompt, str) and reply.strip() in prompt:
+        problems.append(f"{tag}: harness reply text appears in the agent-visible prompt")
     return problems
 
 
-def load_suite(suite: str | Path) -> tuple[dict, dict | None]:
-    """Return (evals spec, responses or None). Raises ScenarioError if invalid."""
+def load_suite(suite: str | Path) -> dict:
+    """Return the validated evals.json spec. Raises ScenarioError if invalid."""
     d = suite_dir(suite)
     spec = _read(d / "evals.json")
     problems = validate_evals(spec, str(d / "evals.json"))
-    responses = None
     if (d / "responses.json").exists():
-        responses = _read(d / "responses.json")
-        if responses.get("suite_id") not in (None, spec.get("suite_id")):
-            problems.append(f"{d / 'responses.json'}: suite_id does not match evals.json")
-        ids = {c.get("case_id") for c in spec.get("cases", []) if isinstance(c, dict)}
-        problems += validate_responses(responses, ids, str(d / "responses.json"))
+        problems.append(f"{d / 'responses.json'}: approval data now lives in each case's "
+                        "approval_policy in evals.json; delete this file")
     if problems:
         raise ScenarioError("; ".join(problems))
-    return spec, responses
+    return spec
 
 
-def approval_policy(responses: dict | None, case_id: str) -> dict:
-    responses = responses or {}
-    entry = {**_DEFAULT_POLICY, **responses.get("default", {}),
-             **responses.get("cases", {}).get(case_id, {})}
+def approval_policy(policy: dict | None) -> dict:
+    """A case's approval_policy with defaults filled in."""
+    entry = {**_DEFAULT_POLICY, **(policy or {})}
     entry.setdefault("reply", None)
     entry.setdefault("scope", None)
-    entry["required"] = entry["test_decision"] in ("approve", "deny", "withhold")
+    entry["required"] = entry["test_decision"] in REQUIRES_APPROVAL
     return entry
 
 
 def load_case(suite: str | Path, case_id: str) -> dict:
-    spec, responses = load_suite(suite)
+    spec = load_suite(suite)
     matches = [c for c in spec["cases"] if c.get("case_id") == case_id]
     if len(matches) != 1:
         raise ScenarioError(f"unknown case_id {case_id!r} in {spec['suite_id']}")
     scenario = copy.deepcopy(matches[0])
     scenario["suite_id"] = spec["suite_id"]
     scenario["defaults"] = copy.deepcopy(spec.get("defaults", {}))
-    scenario["approval_policy"] = approval_policy(responses, case_id)
+    scenario["approval_policy"] = approval_policy(matches[0].get("approval_policy"))
     return scenario
 
 
 def case_ids(suite: str | Path) -> list[str]:
-    spec, _ = load_suite(suite)
+    spec = load_suite(suite)
     return [c["case_id"] for c in spec["cases"]]
 
 
