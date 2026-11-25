@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """suites/dg07_events/verify.py: post-run cluster verification for DG-07.
 
 All DG-07 cases are read-only, so the only check is that the cluster
@@ -7,45 +8,63 @@ matches the baseline snapshot saved during setup.
 Usage (from suites/dg07_events/ or via harness):
   python3 verify.py no-change
 
-Exit: 0 pass, 1 fail (diff printed to stdout).
+Exit: 0 pass, 1 fail (diff printed to stdout), 2 setup/infra error.
 """
+from __future__ import annotations
 
-import difflib
-import json
-import pathlib
-import sys
 import contextlib
+import difflib
 import io
+import json
+from pathlib import Path
+import sys
 
-# Shared contract modules live in .claude/skill-tests/ (two levels up).
-_SKILL_TESTS = pathlib.Path(__file__).resolve().parents[2]
-if str(_SKILL_TESTS) not in sys.path:
-    sys.path.insert(0, str(_SKILL_TESTS))
+# The standard runner imports this file by path, so make the suite folder
+# (for _cluster) and .claude/skill-tests/ (shared modules) importable.
+_SUITE_DIR = Path(__file__).resolve().parent
+for _p in (_SUITE_DIR, _SUITE_DIR.parents[1]):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import _cluster  # noqa: E402
 from grading.results import CheckResult, Finding, inconclusive  # noqa: E402
-from harness import environment as envlib  # noqa: E402
-
-SUITE_DIR = pathlib.Path(__file__).resolve().parent
-SKILL_TESTS_DIR = SUITE_DIR.parents[1]    # .../skill-tests/
-EVALS_DIR = SKILL_TESTS_DIR / "evals"    # .../skill-tests/evals/ (from PR #33)
-LIB_DIR = EVALS_DIR / "lib"
-
-sys.path.insert(0, str(LIB_DIR))
-
-try:
-    from common import BASELINE, die, read_baseline, require_cluster, snapshot  # noqa: E402
-    _DEPENDENCY_ERROR = None
-except ImportError as _exc:
-    # evals/lib/common.py and evals/setup/reset.py came from the pre-squash
-    # PR #33 branch (commit e1fe575) and are not on skills. Fail clearly
-    # instead of with a traceback; prepare() reports BLOCKED.
-    _DEPENDENCY_ERROR = (f"{_exc}: DG-07 needs evals/lib/common.py and evals/setup/reset.py, "
-                         "which only exist in commit e1fe575 (pre-squash PR #33) and are not on skills")
-    BASELINE = None
+from _cluster import (  # noqa: E402  — shared with setup.py
+    BASELINE,
+    log as _log, require_cluster as _require_cluster, snapshot,
+)
 
 
-def verify_no_change():
-    require_cluster()
-    if not pathlib.Path(BASELINE).exists() or pathlib.Path(BASELINE).stat().st_size == 0:
+class VerifyError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Logging / control flow
+# ---------------------------------------------------------------------------
+def log(msg: str) -> None:
+    _log("verify.py", msg)
+
+
+def die(msg: str) -> None:
+    log(f"ERROR: {msg}")
+    raise VerifyError(msg)
+
+
+def read_baseline() -> dict:
+    with open(BASELINE) as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+def verify_no_change() -> int:
+    try:
+        _require_cluster()
+    except RuntimeError as e:
+        die(str(e))
+    bp = Path(BASELINE)
+    if not bp.exists() or bp.stat().st_size == 0:
         die(f"no baseline at {BASELINE}; run setup.py first")
 
     try:
@@ -74,38 +93,41 @@ MODES = {
 }
 
 
-# --------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
-# The CLI above (python3 verify.py no-change) is unchanged.
-
+# The CLI below (python3 verify.py no-change) is unchanged.
+# ---------------------------------------------------------------------------
 def verify(scenario, setup_result, environment):
     """SYSTEM result: the cluster snapshot matches the setup baseline (read-only skill)."""
     if setup_result.get("status") != "READY":
         return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
-    if _DEPENDENCY_ERROR:
-        return inconclusive("dependency_missing", _DEPENDENCY_ERROR)
+    ref = setup_result.get("baseline_ref")
+    if not ref:
+        return inconclusive("baseline_missing", "setup_result has no baseline_ref")
+    env = environment or {}
     out = io.StringIO()
     try:
-        with envlib.kube_env(environment or {}), contextlib.redirect_stdout(out):
+        with _cluster.bound([sys.modules[__name__], _cluster],
+                            EVAL_KUBECONFIG=env.get("kubeconfig_path"), EVAL_CONTEXT=env.get("context"),
+                            BASELINE=str(ref)), contextlib.redirect_stdout(out):
             code = verify_no_change()
-    except SystemExit as exc:          # common.die()
-        return inconclusive("verification_error", f"verify stopped (exit {exc.code})")
-    ref = [str(setup_result.get("baseline_ref"))]
+    except VerifyError as exc:          # infra problem, not an agent verdict
+        return inconclusive("verification_error", str(exc))
     if code == 0:
-        return CheckResult.from_findings([Finding("cluster_unchanged", "PASS", "cluster matches the baseline", ref)])
-    return CheckResult.from_findings([Finding("cluster_unchanged", "FAIL", out.getvalue()[-2000:], ref)])
+        return CheckResult.from_findings([Finding("cluster_unchanged", "PASS", "cluster matches the baseline", [str(ref)])])
+    return CheckResult.from_findings([Finding("cluster_unchanged", "FAIL", out.getvalue()[-2000:], [str(ref)])])
 
 
-def main():
-    if _DEPENDENCY_ERROR:
-        print(f"ERROR: {_DEPENDENCY_ERROR}", file=sys.stderr)
-        sys.exit(2)
+def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in MODES:
         print(f"usage: {sys.argv[0]} <mode>", file=sys.stderr)
         print(f"modes: {', '.join(MODES)}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(MODES[sys.argv[1]]())
+        return 1
+    try:
+        return MODES[sys.argv[1]]()
+    except VerifyError:
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
