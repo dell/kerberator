@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """suites/dg07_events/verify.py: post-run cluster verification for DG-07.
 
 All DG-07 cases are read-only, so the only check is that the cluster
@@ -7,27 +8,52 @@ matches the baseline snapshot saved during setup.
 Usage (from suites/dg07_events/ or via harness):
   python3 verify.py no-change
 
-Exit: 0 pass, 1 fail (diff printed to stdout).
+Exit: 0 pass, 1 fail (diff printed to stdout), 2 setup/infra error.
 """
+from __future__ import annotations
 
 import difflib
 import json
-import pathlib
+from pathlib import Path
 import sys
 
-SUITE_DIR = pathlib.Path(__file__).resolve().parent
-SKILL_TESTS_DIR = SUITE_DIR.parents[1]    # .../skill-tests/
-EVALS_DIR = SKILL_TESTS_DIR / "evals"    # .../skill-tests/evals/ (from PR #33)
-LIB_DIR = EVALS_DIR / "lib"
-
-sys.path.insert(0, str(LIB_DIR))
-
-from common import BASELINE, die, read_baseline, require_cluster, snapshot  # noqa: E402
+from _cluster import (  # noqa: E402  — shared with setup.py
+    BASELINE,
+    log as _log, require_cluster as _require_cluster, snapshot,
+)
 
 
-def verify_no_change():
-    require_cluster()
-    if not pathlib.Path(BASELINE).exists() or pathlib.Path(BASELINE).stat().st_size == 0:
+class VerifyError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Logging / control flow
+# ---------------------------------------------------------------------------
+def log(msg: str) -> None:
+    _log("verify.py", msg)
+
+
+def die(msg: str) -> None:
+    log(f"ERROR: {msg}")
+    raise VerifyError(msg)
+
+
+def read_baseline() -> dict:
+    with open(BASELINE) as f:
+        return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# Verification
+# ---------------------------------------------------------------------------
+def verify_no_change() -> int:
+    try:
+        _require_cluster()
+    except RuntimeError as e:
+        die(str(e))
+    bp = Path(BASELINE)
+    if not bp.exists() or bp.stat().st_size == 0:
         die(f"no baseline at {BASELINE}; run setup.py first")
 
     try:
@@ -56,13 +82,16 @@ MODES = {
 }
 
 
-def main():
+def main() -> int:
     if len(sys.argv) != 2 or sys.argv[1] not in MODES:
         print(f"usage: {sys.argv[0]} <mode>", file=sys.stderr)
         print(f"modes: {', '.join(MODES)}", file=sys.stderr)
-        sys.exit(1)
-    sys.exit(MODES[sys.argv[1]]())
+        return 1
+    try:
+        return MODES[sys.argv[1]]()
+    except VerifyError:
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

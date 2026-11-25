@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """suites/dg07_events/grade.py: DG-07 transcript grader.
 
 Runs two levels of checks:
