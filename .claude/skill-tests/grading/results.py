@@ -99,7 +99,14 @@ class CheckResult:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CheckResult":
-        return cls(status=data["status"], findings=[Finding(**f) for f in data.get("findings", [])])
+        """Load a serialized result. The stored status must match its scoring
+        findings (non-scoring ones excluded); a mismatch is rejected, so a PASS
+        that carries a scoring FAIL can never be loaded."""
+        result = cls(status=data["status"], findings=[Finding(**f) for f in data.get("findings", [])])
+        expected = scoring_status(result.findings)
+        if result.status != expected:
+            raise ValueError(f"CheckResult status {result.status} does not match its findings ({expected})")
+        return result
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -243,7 +243,8 @@ def _command_audit(run):
     """Same rules as verify.py's audit_commands(), applied to executed AgentRun commands."""
     vmod = import_suite_file(HERE, "verify")
     violations = vmod.audit_commands(executed_commands(run))
-    return legacy.command_audit_finding(violations, run.complete, run.trace_completeness)
+    tool_violations, unknowns = legacy.non_shell_tool_audit(run)   # write tools / unknown tools
+    return legacy.command_audit_finding(violations + tool_violations, run.complete, run.trace_completeness, unknowns)
 
 
 def grade(scenario, setup_result, agent_run, system_result):

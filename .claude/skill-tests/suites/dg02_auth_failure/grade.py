@@ -54,7 +54,8 @@ from harness.scenario import import_suite_file  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 GENERAL_CHECKS = [
-    "Ran the skill's collect.py and based the diagnosis on its SIGNALS and quoted evidence",
+    "Ran the skill's collect.py",
+    "Based the diagnosis on observed signals and quoted evidence",
     "The exact error text (event or daemon log) is quoted for any failure reported",
     "The assessment is labelled (confirmed / consistent with / not established / not a failure)",
     "The KDC side is reported as not verified unless it was read with the user's own kvno",
@@ -206,7 +207,7 @@ def store_private(path, data):
 # BEHAVIOR only: the semantic checklist plus the executed-command audit that
 # used to live in verify.py. main() above still produces the old combined report.
 
-SKILL_ADHERENCE = {GENERAL_CHECKS[0]}   # report separately for the no-skill arm
+SKILL_ADHERENCE = {"Ran the skill's collect.py"}   # script use only; evidence grounding is scored
 
 
 def _review_paths(setup_result):
@@ -226,7 +227,8 @@ def _command_audit(run):
             violations += [f"command {i}: {v}" for v in vmod.audit_one(vmod._argv(cmd))]
         except ValueError:
             violations.append(f"command {i}: cannot be parsed safely")
-    return legacy.command_audit_finding(violations, run.complete, run.trace_completeness)
+    tool_violations, unknowns = legacy.non_shell_tool_audit(run)   # write tools / unknown tools
+    return legacy.command_audit_finding(violations + tool_violations, run.complete, run.trace_completeness, unknowns)
 
 
 def grade(scenario, setup_result, agent_run, system_result):

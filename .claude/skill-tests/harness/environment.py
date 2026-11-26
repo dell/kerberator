@@ -55,11 +55,21 @@ def problems(environment: dict) -> list[str]:
     return out
 
 
-def mutation_gate(environment: dict, fixture_id: str | None) -> list[str]:
+def mutation_gate(environment: dict, fixture_id: str | None, target: str | None = None) -> list[str]:
     """Issues that forbid setup from changing the cluster. Empty == allowed.
 
-    Necessary, not sufficient: the runner is still responsible for proving the
-    cluster identity and handing setup a credential limited to fixture scope.
+    Checked here: allow_fixture_mutation, is_disposable, fixture in
+    allowed_fixture_ids, an explicit context, and (when the suite passes one)
+    the fixture target in allowed_targets ("Kind/namespace/name").
+
+    Necessary, NOT sufficient. Not checked here, and the runner must enforce:
+      * cluster identity: the context really is the disposable cluster;
+      * verbs: setup gets a credential limited to permissions.fixture_allowed_verbs
+        and the agent one limited to permissions.agent_allowed_verbs. Suites
+        cannot see which API verbs kubectl issues, so verbs are enforced by RBAC
+        on those credentials, not by this function;
+      * isolation: a separate artifact_dir per run and arm (artifact_path adds
+        run_id/arm when the environment sets them).
     """
     env = normalize(environment)
     issues = []
@@ -71,6 +81,8 @@ def mutation_gate(environment: dict, fixture_id: str | None) -> list[str]:
         issues.append(f"fixture {fixture_id!r} is not in allowed_fixture_ids")
     if not env.get("context"):
         issues.append("no explicit Kubernetes context")
+    if target is not None and env["allowed_targets"] and target not in env["allowed_targets"]:
+        issues.append(f"target {target!r} is not in allowed_targets")
     return issues
 
 
@@ -96,11 +108,21 @@ def kube_env(environment: dict) -> Iterator[None]:
 
 
 def artifact_path(environment: dict, suite_id: str, case_id: str, name: str) -> Path:
-    """Private evaluator file location: <artifact_dir>/<suite_id>/<case_id>/<name>."""
-    base = normalize(environment).get("artifact_dir")
+    """Private evaluator file location:
+    <artifact_dir>[/<run_id>][/<arm>]/<suite_id>/<case_id>/<name>.
+
+    run_id and arm (skill | no_skill) are optional environment keys; when the
+    runner sets them, repeated trials and the two arms never share files.
+    """
+    env = normalize(environment)
+    base = env.get("artifact_dir")
     if not base:
         raise ValueError("environment.artifact_dir is required")
-    p = Path(base) / suite_id / case_id / name
+    p = Path(base)
+    for key in ("run_id", "arm"):
+        if env.get(key):
+            p = p / str(env[key])
+    p = p / suite_id / case_id / name
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
 

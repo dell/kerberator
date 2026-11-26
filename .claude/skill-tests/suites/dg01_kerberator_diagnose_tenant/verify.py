@@ -193,7 +193,7 @@ def write_private(path, payload):
 # only. The executed-command audit now runs in grade.py (it needs the AgentRun).
 
 _COMMAND_AUDIT_NOTE = "Agent-command safety could not be verified"
-_SKILL = Path(__file__).resolve().parents[3] / DEFAULT_SKILL
+_SKILL = Path(__file__).resolve().parents[4] / DEFAULT_SKILL   # file -> suite -> suites -> skill-tests -> .claude -> repo root
 
 
 def _fixture_file(env, case_id):

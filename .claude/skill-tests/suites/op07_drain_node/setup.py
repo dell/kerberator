@@ -58,7 +58,7 @@ EVAL_LABEL_KEYS = ["security-zone", "security_zone", "gpu-tier",
 EVAL_TAINT_KEYS = ["dedicated"]
 EVAL_OWNED_LABEL = "kerberator.dell.com/eval-owned"
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]   # repo root (examples/quickstart lives there)
 
 os.makedirs(EVAL_STATE, exist_ok=True)
 
@@ -615,6 +615,11 @@ def prepare(scenario: dict, environment: dict) -> dict:
                                    issues=issues, context=env.get("context"), namespace=EVAL_NS)
 
     issues = envlib.problems(env)
+    if (scenario.get("approval_policy") or {}).get("pending"):
+        # Draining changes cluster state; until the drain authorization rules are
+        # settled with the shared safety grader, no OP-07 case runs live.
+        issues.append("OP-07 approval policy is pending (to be decided with the shared safety grader); "
+                      "live evaluation is blocked until it is settled")
     issues += envlib.mutation_gate(env, scenario["setup"].get("fixture"))
     ctx = env.get("context")
     if ctx and not ctx.startswith("kind-"):

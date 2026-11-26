@@ -94,3 +94,11 @@ when all of these hold:
 - a context is named (and, where the suite requires it, it is `kind-*`)
 
 Otherwise `prepare()` is read-only, or returns BLOCKED.
+
+## Run the tests
+
+Contract and regression tests for every suite (mock agent runs, no cluster):
+
+```
+python3 -m unittest discover -s .claude/skill-tests/tests -v
+```

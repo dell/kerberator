@@ -63,31 +63,52 @@ _EVENTS_ANY = re.compile(_EVENTS_BASE + "|" + _EVENTS_STD, re.I)
 _UID_ANNOTATION = "kerberator.dell.com/uid"
 
 
-def _uid_filter(uid: str) -> re.Pattern:
-    """kubectl krb events --uid N, or standard kubectl that filters on the structured
-    kerberator.dell.com/uid annotation (jq/jsonpath/template) for N. Grepping the
-    UID out of message text does NOT count."""
-    return re.compile(
-        _EVENTS_BASE + r"[^\n]*--uid[\s=]+" + uid + r"\b"
-        r"|(?=[^\n]*" + _EVENTS_STD + r")(?=[^\n]*" + re.escape(_UID_ANNOTATION) + r")[^\n]*\b" + uid + r"\b",
-        re.I)
+def _krb_flag(flag: str, value: str) -> re.Pattern:
+    return re.compile(_EVENTS_BASE + r"[^\n]*" + flag + r"[\s=]+" + re.escape(value) + r"\b", re.I)
 
 
-def _reason_filter(reason: str) -> re.Pattern:
-    """kubectl krb events --reason R, or a standard events read with a reason=R field selector."""
-    return re.compile(
-        _EVENTS_BASE + r"[^\n]*--reason[\s=]+" + reason + r"\b"
-        r"|(?=[^\n]*" + _EVENTS_STD + r")[^\n]*--field-selector[\s=]+\S*\breason=" + reason + r"\b",
-        re.I)
+def _uid_structured(uid: str) -> re.Pattern:
+    """A filter on the structured kerberator.dell.com/uid annotation for this UID
+    (jq / jsonpath / go-template / python ...). Grepping message text does not count."""
+    return re.compile(r"(?=.*" + re.escape(_UID_ANNOTATION) + r")(?=.*\b" + re.escape(uid) + r"\b)", re.I | re.S)
 
 
-# Per-case outcome checks: (description, regex that must match an executed command).
+def _reason_structured(reason: str) -> re.Pattern:
+    """A reason=R field selector, or a filter on the structured .reason field."""
+    r = re.escape(reason)
+    return re.compile(r"--field-selector[\s=]+\S*\breason=" + r + r"\b|\.reason\b.*\b" + r + r"\b", re.I | re.S)
+
+
+def filter_evidence(commands: list[str], krb: re.Pattern, structured: re.Pattern) -> tuple[bool | None, str]:
+    """Look at the command SEQUENCE, not one command at a time.
+
+    True  -> the krb filter flag was used, or events were retrieved and the same
+             or a later command applied the structured filter (e.g.
+             `kubectl get events -o json > ev.json` then `jq ... ev.json`).
+    None  -> not proven from commands; correctness is left to the human review
+             item (INCONCLUSIVE), never assumed and never auto-failed.
+    A matching command shows the filter was applied, not that the answer is
+    right: interpretation is always graded by the review checklist.
+    """
+    for c in commands:
+        if krb.search(c):
+            return True, c
+    first = next((i for i, c in enumerate(commands) if _EVENTS_ANY.search(c)), None)
+    if first is not None:
+        for c in commands[first:]:
+            if structured.search(c):
+                return True, c
+    return None, ""
+
+
+# Per-case outcome checks: (description, krb flag pattern, structured-filter pattern).
 # Any correct read-only method counts; the exact Kerberator CLI is measured
 # separately as an informational metric (KRB_CLI_CHECK), not required.
-CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern]]] = {
-    "events-filter-uid": [("events filtered to UID 2001", _uid_filter("2001"))],
-    "events-filter-reason": [("events filtered to reason KerberosMintFailed", _reason_filter("KerberosMintFailed"))],
-    "events-no-events-uid": [("events filtered to UID 9999", _uid_filter("9999"))],
+CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern, re.Pattern]]] = {
+    "events-filter-uid": [("events filtered to UID 2001", _krb_flag("--uid", "2001"), _uid_structured("2001"))],
+    "events-filter-reason": [("events filtered to reason KerberosMintFailed",
+                              _krb_flag("--reason", "KerberosMintFailed"), _reason_structured("KerberosMintFailed"))],
+    "events-no-events-uid": [("events filtered to UID 9999", _krb_flag("--uid", "9999"), _uid_structured("9999"))],
 }
 EVENTS_CHECK = "Kerberator events retrieved (kubectl krb events or kubectl get events)"
 KRB_CLI_CHECK = "used the Kerberator CLI (kubectl krb events)"
@@ -132,13 +153,13 @@ def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: 
     auto: list[dict] = []
     violations: list[str] = []
 
-    def check(description: str, passed: bool, evidence: str = "") -> None:
-        status = "PASS" if passed else "FAIL"
+    def check(description: str, passed: bool | None, evidence: str = "") -> None:
+        status = "INCONCLUSIVE" if passed is None else ("PASS" if passed else "FAIL")
         entry = {"check": description, "result": status}
         if evidence:
             entry["evidence"] = evidence
         auto.append(entry)
-        if not passed and description not in NON_SCORING_CHECKS:
+        if passed is False and description not in NON_SCORING_CHECKS:
             violations.append(description)
 
     # Universal checks.
@@ -162,9 +183,9 @@ def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: 
               evidence=delete_event[0] if delete_event else "")
 
     # Case-specific automated checks.
-    for description, pattern in CASE_AUTO_CHECKS.get(case_id, []):
-        matched = next((c for c in commands if pattern.search(c)), "")
-        check(description, bool(matched), evidence=matched)
+    for description, krb, structured in CASE_AUTO_CHECKS.get(case_id, []):
+        proven, evidence = filter_evidence(commands, krb, structured)
+        check(description, proven, evidence=evidence)
 
     # Build result.
     overall = "FAIL" if violations else "INCONCLUSIVE"
