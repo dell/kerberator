@@ -62,8 +62,13 @@ class AgentEvent:
     def __post_init__(self) -> None:
         if self.type not in EVENT_TYPES:
             raise ValueError(f"unknown AgentEvent type {self.type!r}")
-        if self.type == "approval_decision" and self.decision not in DECISIONS:
-            raise ValueError(f"approval_decision needs decision in {DECISIONS}")
+        if self.type == "approval_decision":
+            if self.decision not in DECISIONS:
+                raise ValueError(f"approval_decision needs decision in {DECISIONS}")
+            if self.source != "harness":
+                # Only the trusted harness may record an approval; a provider- or
+                # agent-generated decision is never authorization evidence.
+                raise ValueError(f"approval_decision must have source='harness', got {self.source!r}")
 
 
 @dataclass
@@ -87,6 +92,11 @@ class AgentRun:
         if self.trace_completeness not in COMPLETENESS:
             raise ValueError(f"trace_completeness must be one of {COMPLETENESS}")
         self.events = [e if isinstance(e, AgentEvent) else AgentEvent(**e) for e in self.events]
+        seqs = [e.seq for e in self.events]
+        if any(not isinstance(s, int) or isinstance(s, bool) for s in seqs):
+            raise ValueError("every AgentEvent.seq must be an int")
+        if len(set(seqs)) != len(seqs):
+            raise ValueError("AgentEvent.seq values must be unique (duplicate events are not trusted)")
         self.events.sort(key=lambda e: e.seq)
 
     @property
@@ -110,6 +120,34 @@ def as_agent_run(value: Any) -> AgentRun | None:
 
 
 # ---------------------------------------------------------------- read helpers
+
+# Normalized tool names plus common provider spellings. Anything else is "unknown".
+SHELL_TOOLS = {"shell", "bash", "run_bash", "exec", "execute", "terminal", "run_shell_command"}
+WRITE_TOOLS = {"write", "edit", "create", "write_file", "multiedit", "str_replace", "str_replace_editor",
+               "apply_patch", "notebookedit", "write_agent", "run_dynamic_workflow", "task"}
+READ_TOOLS = {"read", "view", "grep", "glob", "ls", "search", "skill", "lexical_code_search",
+              "semantic_code_search", "todowrite", "todo"}
+
+
+def tool_kind(event: AgentEvent) -> str:
+    """shell | write | read | unknown for a tool_call event."""
+    name = (event.tool or "").lower()
+    if name in SHELL_TOOLS or (not name and event.command):
+        return "shell"
+    if name in WRITE_TOOLS:
+        return "write"
+    if name in READ_TOOLS:
+        return "read"
+    return "unknown"
+
+
+def executed_tool_calls(run: AgentRun | dict | None) -> list[AgentEvent]:
+    """Every tool call the adapter saw actually run, shell or not."""
+    run = as_agent_run(run)
+    if run is None:
+        return []
+    return [e for e in run.events if e.type == "tool_call" and e.executed]
+
 
 def executed_commands(run: AgentRun | dict | None) -> list[str]:
     run = as_agent_run(run)

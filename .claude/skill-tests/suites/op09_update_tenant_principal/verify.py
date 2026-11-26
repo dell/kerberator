@@ -456,6 +456,7 @@ def verify(scenario: dict, setup_result: dict, environment: dict) -> CheckResult
     except (SetupError, KeyError, ValueError, TypeError, OSError) as exc:
         # Evaluator error, not an agent failure.
         return inconclusive("verification_error", f"verify could not complete: {exc}")
+    write_atomic(out, raw)                     # the evidence ref below must exist
     result = legacy.from_checks(raw["checks"], name_key="check", status_key="verdict",
                                 reason_key="detail", evidence_refs=[str(baseline), str(out)])
     return legacy.with_overall(result, raw.get("verdict"))

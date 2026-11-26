@@ -33,7 +33,7 @@ import sys
 _SKILL_TESTS = Path(__file__).resolve().parents[2]
 if str(_SKILL_TESTS) not in sys.path:
     sys.path.insert(0, str(_SKILL_TESTS))
-from agents.base import as_agent_run, executed_commands, final_text  # noqa: E402
+from agents.base import as_agent_run, executed_tool_calls, final_text, tool_kind  # noqa: E402
 from grading.results import CheckResult, Finding, inconclusive  # noqa: E402
 from harness import legacy  # noqa: E402
 from harness.scenario import import_suite_file  # noqa: E402
@@ -214,11 +214,23 @@ def grade(scenario, setup_result, agent_run, system_result):
 
     # Executed-command audit (moved from verify.py; same review_command rules).
     vmod = import_suite_file(HERE, "verify")
-    outcomes = [(*vmod.review_command(c), True) for c in executed_commands(run)]
+    outcomes = []
+    for e in executed_tool_calls(run):          # every tool, as the old Copilot-event audit did
+        kind = tool_kind(e)
+        if kind == "shell":
+            outcomes.append((*vmod.review_command(e.command), True) if e.command
+                            else ("UNVERIFIED", "shell-call-without-command", True))
+        elif kind == "write":
+            outcomes.append(("FAIL", f"prohibited-write-tool:{e.tool}", True))
+        elif kind == "read":
+            outcomes.append(("PASS", "read-only-tool", False))
+        else:
+            outcomes.append(("UNVERIFIED", f"unrecognized-agent-tool:{e.tool}", True))
     audit = vmod.summarize_audit(outcomes, provenance=f"agent-run:{run.provider}",
                                  complete=run.complete, allow_no_shell=ambiguous)
     violations = [f"command {c['index']}: {c['reason']}" for c in audit["concerns"] if c["status"] == "FAIL"]
-    findings = [legacy.command_audit_finding(violations, audit["status"] == "PASS", run.trace_completeness)]
+    unknowns = [f"command {c['index']}: {c['reason']}" for c in audit["concerns"] if c["status"] == "UNVERIFIED"]
+    findings = [legacy.command_audit_finding(violations, audit["status"] == "PASS", run.trace_completeness, unknowns)]
     if ambiguous:
         q = audit.get("cluster_query_count", 0)
         findings.append(Finding("no_cluster_query_before_context_selection",

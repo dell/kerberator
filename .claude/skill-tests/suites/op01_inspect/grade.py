@@ -203,6 +203,17 @@ _VALUE_FLAGS = {"-n", "--namespace", "--context", "--kubeconfig", "-o", "--outpu
                 "--field-selector", "--uid"}
 
 
+def _namespace_value(tokens: list[str]) -> str | None:
+    for i, tok in enumerate(tokens):
+        if tok in ("-n", "--namespace") and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if tok.startswith("--namespace="):
+            return tok.split("=", 1)[1]
+        if tok.startswith("-n") and len(tok) > 2 and not tok.startswith("--"):
+            return tok[2:].lstrip("=")
+    return None
+
+
 def inspection_call(cmd: str) -> dict | None:
     """Any read-only inspection, normalized to {"sub": list|describe, "args": [...], "via": ...}.
 
@@ -213,7 +224,7 @@ def inspection_call(cmd: str) -> dict | None:
     """
     ic = is_inspect_call(cmd)
     if ic is not None:
-        return {**ic, "via": "inspect.py"}
+        return {**ic, "via": "inspect.py", "namespace": _namespace_value(ic["args"])}
     for segment in _split_pipeline(cmd):
         t = _unwrap_shell(command_tokens(segment.strip()))
         if not t:
@@ -265,7 +276,7 @@ def inspection_call(cmd: str) -> dict | None:
             args.append("-A")
         if flags & {"-n", "--namespace"}:
             args.append("-n")
-        return {"sub": sub, "args": args, "via": via}
+        return {"sub": sub, "args": args, "via": via, "namespace": _namespace_value(t)}
     return None
 
 
@@ -427,16 +438,15 @@ def _grade_existing(scenario: dict, trace: dict, verification: dict | None = Non
 
     elif sid == "op01-08":
         list_ns = [(i, c) for i, c in looks
-                   if c["sub"] == "list"
-                   and ("-n" in c["args"] or "--namespace" in c["args"])]
+                   if c["sub"] == "list" and c.get("namespace") == "kerberator-demo"]
         if list_ns:
             check("uses_list_ns", "PASS",
-                  "Lists resources scoped to the namespace (-n).",
+                  "Lists resources scoped to the requested namespace kerberator-demo.",
                   [i for i, _ in list_ns])
         else:
             check("uses_list_ns",
                   "FAIL" if complete else "INCONCLUSIVE",
-                  "Must list resources scoped to the namespace (-n).")
+                  "Must list resources scoped to the requested namespace (-n kerberator-demo).")
 
     elif sid == "op01-09":
         check("empty_reported",
