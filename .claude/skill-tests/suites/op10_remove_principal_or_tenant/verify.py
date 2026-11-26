@@ -37,6 +37,7 @@ _SKILL_TESTS = _SUITE_DIR.parents[1]
 if str(_SKILL_TESTS) not in sys.path:
     sys.path.insert(0, str(_SKILL_TESTS))
 from grading.results import FAIL, INCONCLUSIVE, PASS, CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import environment as envlib  # noqa: E402
 from harness import scenario as sc  # noqa: E402
 
 _setup = sc.import_suite_file(_SUITE_DIR, "setup")
@@ -66,13 +67,13 @@ def verify(scenario: dict, setup_result: dict, environment: dict) -> CheckResult
         baseline = json.loads(Path(ref).read_text(encoding="utf-8"))
     except (TypeError, OSError, ValueError) as exc:
         return inconclusive("baseline_missing", f"cannot read setup baseline {ref!r}: {exc}")
-    env = environment or {}
+    env = envlib.normalize(environment)
     ctx = env.get("context") or baseline.get("context")
     if not ctx:
         return inconclusive("no_context", "no explicit context to verify against")
     if ctx != baseline.get("context"):
         return inconclusive("context_mismatch", f"verify context {ctx!r} is not the setup context")
-    k = Kube(ctx, env.get("kubeconfig_path"), timeout=int(env.get("timeout_seconds") or 60))
+    k = Kube(ctx, env.get("kubeconfig_path"), timeout=int(env["timeout_seconds"]))
     wait = float(env.get("verify_timeout_seconds")
                  or (scenario.get("defaults") or {}).get("verify_timeout_seconds") or 90)
     expected = scenario["expected"]
@@ -99,7 +100,7 @@ def verify(scenario: dict, setup_result: dict, environment: dict) -> CheckResult
             targets = expected.get("targets") if state == "present_all" else [target]
             for t in targets:
                 tkey = _key(t["kind"], t["namespace"], t["name"])
-                base = objects.get(tkey) or (baseline.get("target_meta") if t is target else None)
+                base = objects.get(tkey) or (baseline.get("target_meta") if t == target else None)
                 meta = k.meta(t["kind"], t["name"], t["namespace"])
                 rid = "target_state" if len(targets) == 1 else f"target_state.{rule_id(t['namespace'])}"
                 if _same(meta, base):

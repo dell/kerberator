@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Fake kubectl for OP-10 suite tests. State lives in $FAKE_KUBE_STATE (JSON)."""
+import json, os, sys, uuid
+
+state_path = os.environ["FAKE_KUBE_STATE"]
+st = json.load(open(state_path))
+args = sys.argv[1:]
+clean, i = [], 0
+while i < len(args):
+    if args[i] in ("--context", "--kubeconfig"):
+        i += 2
+        continue
+    clean.append(args[i]); i += 1
+st.setdefault("log", []).append(clean)
+KINDS = {"namespace": "Namespace", "namespaces": "Namespace",
+         "principals.kerberator.dell.com": "Principal", "tenants.kerberator.dell.com": "Tenant",
+         "secrets": "Secret", "daemonsets.apps": "DaemonSet", "configmaps": "ConfigMap",
+         "roles.rbac.authorization.k8s.io": "Role", "rolebindings.rbac.authorization.k8s.io": "RoleBinding",
+         "clusterrole": "ClusterRole", "clusterrolebinding": "ClusterRoleBinding"}
+objs = st.setdefault("objects", {})
+
+
+def flag(name):
+    return clean[clean.index(name) + 1] if name in clean else None
+
+
+def save():
+    json.dump(st, open(state_path, "w"))
+
+
+def notfound(what):
+    save(); sys.stderr.write(f'Error from server (NotFound): {what} not found\n'); sys.exit(1)
+
+
+if st.get("fail_all"):
+    save(); sys.stderr.write("Unable to connect to the server\n"); sys.exit(1)
+verb = clean[0]
+ns = flag("-n")
+if verb == "get":
+    kind, name = KINDS.get(clean[1], clean[1]), clean[2]
+    key = f"{kind}/{ns or '-'}/{name}"
+    if key not in objs:
+        notfound(name)
+    o = objs[key]
+    if "-o" in clean and flag("-o") == "json":
+        print(json.dumps({"metadata": {"labels": o.get("labels", {})}}))
+    else:
+        print(f"{o['uid']}   {o.get('deletionTimestamp') or '<none>'}")
+elif verb == "delete" and clean[1] == "namespace":
+    n = clean[2]
+    for k in [k for k in objs if k.split("/")[1] == n] + [f"Namespace/-/{n}"]:
+        objs.pop(k, None)
+elif verb == "delete":
+    pass
+elif verb == "create" and clean[1] == "namespace":
+    objs[f"Namespace/-/{clean[2]}"] = {"uid": str(uuid.uuid4()), "labels": {}}
+elif verb == "label":
+    k, v = clean[3].split("=")
+    objs[f"Namespace/-/{clean[2]}"]["labels"][k] = v
+elif verb == "apply":
+    for o in json.load(sys.stdin)["items"]:
+        m = o["metadata"]
+        objs[f"{o['kind']}/{m.get('namespace', '-')}/{m['name']}"] = {"uid": str(uuid.uuid4()),
+                                                                    "labels": m.get("labels", {})}
+        if o["kind"] == "Tenant" and st.get("operator"):
+            t = m["name"]
+            for kind, nm in (("DaemonSet", f"{t}-kerberator-daemon"), ("ConfigMap", f"{t}-roster"),
+                             ("Secret", f"{t}-keytabs"), ("Role", f"{t}-kerberator-daemon-events"),
+                             ("RoleBinding", f"{t}-kerberator-daemon-events")):
+                objs[f"{kind}/{m['namespace']}/{nm}"] = {"uid": str(uuid.uuid4())}
+else:
+    save(); sys.stderr.write(f"fake kubectl: unsupported {clean}\n"); sys.exit(1)
+save()
