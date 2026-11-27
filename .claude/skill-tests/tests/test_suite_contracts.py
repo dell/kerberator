@@ -45,6 +45,7 @@ EXPECTED_COUNTS = {
     "op08_validate_config": 8,
     "op03_register_principal": 8,
     "dg07_events": 8,
+    "op10_remove_principal_or_tenant": 10,
 }
 STANDARDIZED = sorted(EXPECTED_COUNTS)
 
