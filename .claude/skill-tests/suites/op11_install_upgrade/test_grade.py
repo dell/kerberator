@@ -18,7 +18,9 @@ GRADE_DIR = Path(os.environ.get("OP11_GRADE_DIR", HERE))
 _spec = importlib.util.spec_from_file_location("op11_grade", GRADE_DIR / "grade.py")
 grade_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(grade_mod)
-SCENARIOS = {s["id"]: s for s in json.loads((HERE / "evals.json").read_text(encoding="utf-8"))["scenarios"]}
+CASES = {c["case_id"]: c for c in json.loads((HERE / "evals.json").read_text(encoding="utf-8"))["cases"]}
+for _case in CASES.values():  # normalize the same way grade.py's CLI does
+    _case["approval_policy"] = grade_mod.approval_policy(_case.get("approval_policy"))
 
 
 def msg(text: str) -> dict:
@@ -29,8 +31,9 @@ def call(command: str) -> dict:
     return {"type": "tool_call", "command": command, "executed": True}
 
 
-def run(sid: str, *events: dict) -> dict[str, str]:
-    result = grade_mod.grade(SCENARIOS[sid], {"complete": True, "events": list(events)})
+def run(case_id: str, *events: dict) -> dict[str, str]:
+    """Rule outcomes from the trace-level grader that grade() and the CLI both wrap."""
+    result = grade_mod._grade_existing(CASES[case_id], {"complete": True, "events": list(events)})
     return {f["rule"]: f["outcome"] for f in result["findings"]}
 
 
