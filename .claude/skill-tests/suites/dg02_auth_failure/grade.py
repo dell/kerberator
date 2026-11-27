@@ -43,9 +43,19 @@ import re
 import sys
 import tempfile
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from agents.base import as_agent_run, executed_commands, final_text  # noqa: E402
+from grading.results import CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import legacy  # noqa: E402
+from harness.scenario import import_suite_file  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 GENERAL_CHECKS = [
-    "Ran the skill's collect.py and based the diagnosis on its SIGNALS and quoted evidence",
+    "Ran the skill's collect.py",
+    "Based the diagnosis on observed signals and quoted evidence",
     "The exact error text (event or daemon log) is quoted for any failure reported",
     "The assessment is labelled (confirmed / consistent with / not established / not a failure)",
     "The KDC side is reported as not verified unless it was read with the user's own kvno",
@@ -118,7 +128,7 @@ def objective_checks(case, observed, text):
         problems.append("Agent response is empty")
         return problems, hints
 
-    scenario = case["scenario"]
+    scenario = case["setup"]["fixture"]
     kind = case["expected"]["kind"]
     signature = ((observed or {}).get("signals") or {}).get("error_signature", "")
 
@@ -189,6 +199,66 @@ def store_private(path, data):
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point:
+#   grade(scenario, setup_result, agent_run, system_result) -> CheckResult
+# BEHAVIOR only: the semantic checklist plus the executed-command audit that
+# used to live in verify.py. main() above still produces the old combined report.
+
+SKILL_ADHERENCE = {"Ran the skill's collect.py"}   # script use only; evidence grounding is scored
+
+
+def _review_paths(setup_result):
+    ref = setup_result.get("baseline_ref")
+    if not ref:
+        return None, None
+    d = Path(ref).parent
+    return d / "review.json", d / "review-template.json"
+
+
+def _command_audit(run):
+    """Same rules as verify.py's audit_one(), applied to executed AgentRun commands."""
+    vmod = import_suite_file(HERE, "verify")
+    violations = []
+    for i, cmd in enumerate(executed_commands(run)):
+        try:
+            violations += [f"command {i}: {v}" for v in vmod.audit_one(vmod._argv(cmd))]
+        except ValueError:
+            violations.append(f"command {i}: cannot be parsed safely")
+    tool_violations, unknowns = legacy.non_shell_tool_audit(run)   # write tools / unknown tools
+    return legacy.command_audit_finding(violations + tool_violations, run.complete, run.trace_completeness, unknowns)
+
+
+def grade(scenario, setup_result, agent_run, system_result):
+    run = as_agent_run(agent_run)
+    if run is None:
+        return inconclusive("agent_run_missing", "no AgentRun was supplied")
+    case = scenario
+    findings = [_command_audit(run)]
+
+    response = final_text(run)
+    if not response.strip():
+        findings.append(Finding("agent_response_present",
+                                "FAIL" if run.complete else "INCONCLUSIVE", "agent final response is empty"))
+
+    review_path, template_path = _review_paths(setup_result)
+    review = load_json(review_path) if review_path and review_path.is_file() else None
+    if review is None and template_path and not template_path.exists():
+        store_private(template_path, make_review(case))       # for the human reviewer
+    findings += legacy.review_findings(make_review(case), review,
+                                       review_ref=str(review_path) if review_path else None,
+                                       case_id=case["case_id"],
+                                       skill_adherence=SKILL_ADHERENCE)
+
+    observed = {}
+    if setup_result.get("baseline_ref") and Path(setup_result["baseline_ref"]).is_file():
+        observed = load_json(Path(setup_result["baseline_ref"])).get("observed") or {}
+    problems, hints = objective_checks(case, observed, response)
+    if hints and review is None:
+        findings.append(Finding("reviewer_hints", "INCONCLUSIVE", "; ".join(hints)))
+    return CheckResult.from_findings(findings)
 
 
 def main(argv=None):

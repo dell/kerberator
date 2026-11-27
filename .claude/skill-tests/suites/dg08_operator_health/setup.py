@@ -30,6 +30,12 @@ import subprocess
 import sys
 import tempfile
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib, legacy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 TENANT_CRD = "tenants.kerberator.dell.com"
 PRINCIPAL_CRD = "principals.kerberator.dell.com"
@@ -229,7 +235,7 @@ def validate_scenario(case, e):
         if not pred:
             issues.append(explanation)
 
-    scenario = case["scenario"]
+    scenario = case["setup"]["fixture"]
     if scenario == "ambiguous_kubernetes_context":
         need(isinstance(e.get("contexts"), list) and len(set(e["contexts"])) >= 2,
              "Fixture must contain at least two distinct configured contexts")
@@ -424,7 +430,73 @@ def private_json(path, payload):
             os.unlink(temp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Runs main() above in-process; the CLI is unchanged.
+
+SUITE_ID = "dg08_operator_health"
+_SETUP_STATUS = {"READY": "READY", "INCONCLUSIVE": "UNKNOWN"}
+
+
+def _fixture_file(env, case_id):
+    if env.get("fixture_file"):
+        return Path(env["fixture_file"])
+    d = Path(env["fixture_dir"]) if env.get("fixture_dir") else HERE / "fixtures"
+    return d / f"{case_id}.json"
+
+
+def prepare(scenario, environment):
+    """Read-only preflight (DG-08 never injects faults); saves the baseline.
+
+    environment["mode"]: "live" (default) needs context, operator_namespace and
+    operator_deployment; "fixture" reads a trusted sanitized JSON snapshot from
+    fixture_file or <fixture_dir|fixtures>/<case_id>.json.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    mode = env.get("mode", "live")
+    ctx = env.get("context")
+    op_ns = env.get("operator_namespace")
+
+    def result(status, issues, ref=None, context=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=context or ctx, namespace=op_ns)
+
+    issues = envlib.problems(env)
+    argv = ["--case-id", case_id, "--mode", mode]
+    if mode == "live":
+        for key in ("context", "operator_namespace", "operator_deployment"):
+            if not env.get(key):
+                issues.append(f"environment.{key} is required in live mode; refusing to guess")
+        if not issues:
+            argv += ["--context", ctx, "--operator-namespace", op_ns,
+                     "--operator-deployment", env["operator_deployment"]]
+    elif mode == "fixture":
+        fixture = _fixture_file(env, case_id)
+        if not fixture.is_file():
+            issues.append(f"no recorded evidence snapshot for {case_id} ({fixture.name})")
+        argv += ["--fixture-file", str(fixture)]
+    else:
+        issues.append(f"unknown environment.mode {mode!r}")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    baseline.unlink(missing_ok=True)
+    argv += ["--output", str(baseline)]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None:
+        return result("UNKNOWN", [f"setup error: {err}"])
+    if not baseline.is_file():
+        return result("BLOCKED", [err or "setup produced no baseline"])
+    raw = json.loads(baseline.read_text(encoding="utf-8"))
+    return result(_SETUP_STATUS.get(raw.get("setup_status"), "UNKNOWN"), list(raw.get("issues", [])),
+                  str(baseline), raw.get("context"))
+
+
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument("--case-id", required=True)
     p.add_argument("--mode", choices=("fixture", "live"), default="fixture")
@@ -433,7 +505,7 @@ def main():
     p.add_argument("--operator-namespace", help="Required for live mode")
     p.add_argument("--operator-deployment", help="Required for live mode")
     p.add_argument("--output", type=Path, help="Private baseline path")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     case = load_case(args.case_id)
     if args.mode == "fixture":
@@ -441,7 +513,7 @@ def main():
             p.error("Fixture mode requires --fixture-file <trusted-sanitized-snapshot.json>")
         evidence = normalize_fixture(args.fixture_file)
     else:
-        if case["scenario"] == "ambiguous_kubernetes_context":
+        if case["setup"]["fixture"] == "ambiguous_kubernetes_context":
             p.error("Multiple-context case is fixture-only; do not query a cluster")
         if args.fixture_file:
             p.error("Do not combine --fixture-file with live mode")
@@ -467,7 +539,7 @@ def main():
     baseline = {
         "case_id": args.case_id,
         "skill_id": "DG-08",
-        "scenario": case["scenario"],
+        "scenario": case["setup"]["fixture"],
         "mode": args.mode,
         "setup_status": "READY" if not issues else "INCONCLUSIVE",
         "context": observed.get("context"),

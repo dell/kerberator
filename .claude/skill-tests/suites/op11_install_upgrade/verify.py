@@ -33,6 +33,13 @@ import sys
 import time
 from typing import Any
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from grading.results import CheckResult, inconclusive  # noqa: E402
+from harness import environment as envlib, legacy  # noqa: E402
+
 
 class VerifyError(Exception):
     pass
@@ -118,7 +125,7 @@ def result_verdict(checks: list[dict]) -> str:
 def run(args: argparse.Namespace) -> dict:
     suite = load_json(args.evals)
     baseline_file = load_json(args.baseline)
-    matches = [s for s in suite.get("scenarios", []) if s.get("id") == args.scenario]
+    matches = [s for s in suite.get("cases", []) if s.get("case_id") == args.scenario]
     if len(matches) != 1:
         raise VerifyError(f"Unknown/duplicate scenario {args.scenario}")
     scenario = matches[0]
@@ -192,6 +199,33 @@ def run(args: argparse.Namespace) -> dict:
     tmp.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, dest)
     return output
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# Wraps run() above (same checks, same bounded polling); the CLI is unchanged.
+
+def verify(scenario: dict, setup_result: dict, environment: dict) -> CheckResult:
+    """SYSTEM result: independent Kubernetes state vs. the setup baseline."""
+    env = envlib.normalize(environment)
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    baseline = setup_result.get("baseline_ref")
+    if not baseline or not Path(baseline).is_file():
+        return inconclusive("baseline_missing", "setup_result.baseline_ref does not point at a baseline file")
+    suite_id = scenario.get("suite_id") or setup_result.get("suite_id")
+    out = envlib.artifact_path(env, suite_id, scenario["case_id"], "verification.json")
+    args = argparse.Namespace(scenario=scenario["case_id"], baseline=baseline,
+                              evals=str(Path(__file__).with_name("evals.json")), output=str(out))
+    try:
+        with envlib.kube_env(env):
+            raw = run(args)
+    except (VerifyError, KeyError, ValueError, TypeError, OSError) as exc:
+        # Evaluator error, not an agent failure.
+        return inconclusive("verification_error", f"verify could not complete: {exc}")
+    result = legacy.from_checks(raw["checks"], name_key="check", status_key="verdict",
+                                reason_key="details", evidence_refs=[str(baseline), str(out)])
+    return legacy.with_overall(result, raw.get("verdict"))
 
 
 def main() -> int:

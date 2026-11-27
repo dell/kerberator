@@ -29,6 +29,15 @@ import sys
 import time
 from typing import Any
 
+# The standard runner imports this file by path, so make the suite folder
+# (for _cluster) and .claude/skill-tests/ (shared modules) importable.
+_SUITE_DIR = Path(__file__).resolve().parent
+for _p in (_SUITE_DIR, _SUITE_DIR.parents[1]):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import _cluster  # noqa: E402
+from harness import environment as envlib  # noqa: E402
 from _cluster import (  # noqa: E402  — shared with verify.py
     BASELINE, DAEMON_PODS, DS, EVAL_CLUSTER, EVAL_CONTEXT,
     EVAL_KUBECONFIG, EVAL_NS, EVAL_STATE, PRINCIPAL, TENANT,
@@ -486,6 +495,53 @@ STATES = {
     "mint-failed": setup_mint_failed,
     "keytab-missing": setup_keytab_missing,
 }
+
+
+# ---------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# The CLI below (python3 setup.py <state>) is unchanged.
+# ---------------------------------------------------------------------------
+SUITE_ID = "dg07_events"
+
+
+def prepare(scenario, environment):
+    """Reset the disposable cluster into the case's event state; save the baseline.
+
+    Every DG-07 state resets the quickstart objects and may rotate a KDC key or
+    delete the keytab Secret, so this always needs the mutation gate on a
+    kind-* context. kubectl uses environment.kubeconfig_path / context, and the
+    baseline is written to the private artifact_dir.
+    """
+    env = envlib.normalize(environment)
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    state = (scenario.get("setup") or {}).get("fixture")
+
+    def result(status, issues, ref=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, namespace=EVAL_NS)
+
+    issues = envlib.problems(env)
+    issues += envlib.mutation_gate(env, state)
+    if env.get("context") and not env["context"].startswith("kind-"):
+        issues.append("DG-07 states only run on a disposable kind-* context")
+    if env.get("namespace") not in (None, EVAL_NS):
+        issues.append(f"DG-07 only supports namespace {EVAL_NS} (quickstart manifests hard-code it)")
+    if state not in STATES:
+        issues.append(f"unknown state {state!r}")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, scenario["case_id"], "baseline.json")
+    try:
+        with _cluster.bound([sys.modules[__name__], _cluster],
+                            EVAL_KUBECONFIG=env.get("kubeconfig_path"), EVAL_CONTEXT=env["context"],
+                            BASELINE=str(baseline), EVAL_STATE=str(baseline.parent)):
+            STATES[state]()
+    except SetupError as exc:
+        return result("BLOCKED", [f"setup stopped: {exc}"])
+    except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+        return result("UNKNOWN", [f"setup error: {exc}"])
+    return result("READY", [], str(baseline))
 
 
 def main() -> int:

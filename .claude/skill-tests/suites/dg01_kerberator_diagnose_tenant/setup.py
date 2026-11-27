@@ -23,6 +23,12 @@ import subprocess
 import sys
 import tempfile
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib, legacy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_SKILL = Path(".claude/skills/kerberator-diagnose-tenant/scripts/diagnose.py")
 VALID_STATUSES = {
@@ -74,7 +80,7 @@ def preflight(case, parsed, output, mode, context):
     if mode == "live" and parsed["context"] != context:
         issues.append("Reported CONTEXT differs from explicitly chosen context")
 
-    scenario = case["scenario"]
+    scenario = case["setup"]["fixture"]
     codes = {f["code"] for f in parsed["findings"]}
     required_codes = {
         "no_matching_node_labels": "no-eligible-nodes",
@@ -125,7 +131,75 @@ def atomic_private_json(path, payload):
             os.unlink(tmp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Runs main() above in-process; the CLI is unchanged.
+
+SUITE_ID = "dg01_kerberator_diagnose_tenant"
+_SETUP_STATUS = {"READY": "READY", "INCONCLUSIVE": "UNKNOWN"}
+_SKILL = Path(__file__).resolve().parents[4] / DEFAULT_SKILL   # file -> suite -> suites -> skill-tests -> .claude -> repo root
+
+
+def _fixture_file(env, case_id):
+    if env.get("fixture_file"):
+        return Path(env["fixture_file"])
+    d = Path(env["fixture_dir"]) if env.get("fixture_dir") else HERE / "fixtures"
+    return d / f"{case_id}.txt"
+
+
+def prepare(scenario, environment):
+    """Read-only preflight: confirm the scenario is present and save the baseline.
+
+    DG-01 never injects faults. environment["mode"]: "live" (default; needs an
+    explicit context) or "fixture" (offline: reads fixture_file, or
+    <fixture_dir|fixtures>/<case_id>.txt). Optional key: tenant.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    defaults = scenario.get("defaults") or {}
+    tenant = env.get("tenant") or defaults.get("tenant", "demo")
+    namespace = env.get("namespace") or defaults.get("namespace", "kerberator-demo")
+    mode = env.get("mode", "live")
+    ctx = env.get("context")
+
+    def result(status, issues, ref=None, context=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=context or ctx, namespace=namespace)
+
+    issues = envlib.problems(env)
+    argv = ["--case-id", case_id, "--mode", mode, "--tenant", tenant, "--namespace", namespace,
+            "--skill-script", str(_SKILL)]
+    if mode == "live":
+        if not ctx:
+            issues.append("environment.context is required in live mode; refusing to guess a cluster")
+        else:
+            argv += ["--context", ctx]
+    elif mode == "fixture":
+        fixture = _fixture_file(env, case_id)
+        if not fixture.is_file():
+            issues.append(f"no recorded diagnose.py fixture for {case_id} ({fixture.name})")
+        argv += ["--fixture-file", str(fixture)]
+    else:
+        issues.append(f"unknown environment.mode {mode!r}")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    baseline.unlink(missing_ok=True)
+    argv += ["--output", str(baseline)]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None:
+        return result("UNKNOWN", [f"setup error: {err}"])
+    if not baseline.is_file():
+        return result("BLOCKED", [err or "setup produced no baseline"])
+    raw = json.loads(baseline.read_text(encoding="utf-8"))
+    status = _SETUP_STATUS.get(raw.get("setup_status"), "UNKNOWN")
+    return result(status, list(raw.get("issues", [])), str(baseline), raw.get("context"))
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case-id", required=True)
     parser.add_argument("--mode", choices=["fixture", "live"], default="fixture")
@@ -135,7 +209,7 @@ def main():
     parser.add_argument("--namespace", default="kerberator-demo")
     parser.add_argument("--skill-script", type=Path, default=DEFAULT_SKILL)
     parser.add_argument("--output", type=Path, help="Private JSON baseline path")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     _, case = load_case(args.case_id)
     if args.mode == "fixture":
@@ -150,7 +224,7 @@ def main():
         if not skill.is_file():
             parser.error(f"Skill script not found: {skill}")
         command = [sys.executable, str(skill)]
-        if case["scenario"] == "ambiguous_kubernetes_context":
+        if case["setup"]["fixture"] == "ambiguous_kubernetes_context":
             # This case must be tested using a recorded fixture, not against
             # an actively selected live cluster.
             parser.error("Multiple-context selection case is fixture-only")
@@ -168,7 +242,7 @@ def main():
     issues = preflight(case, parsed, output, args.mode, args.context)
     baseline = {
         "case_id": args.case_id,
-        "scenario": case["scenario"],
+        "scenario": case["setup"]["fixture"],
         "mode": args.mode,
         "setup_status": "READY" if not issues else "INCONCLUSIVE",
         "tenant": args.tenant,

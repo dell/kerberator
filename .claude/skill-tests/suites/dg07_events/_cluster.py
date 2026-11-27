@@ -7,6 +7,7 @@ and snapshot() from here so a single definition prevents drift.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -146,3 +147,23 @@ def snapshot() -> dict:
             "workload_pods": workload_pods,
             "daemon_pod_uids": daemon_pod_uids(),
             "tenants": tenants, "namespaces": namespaces}
+
+
+@contextlib.contextmanager
+def bound(modules, **values):
+    """Temporarily override module-level settings (EVAL_KUBECONFIG, EVAL_CONTEXT,
+    BASELINE, EVAL_STATE) in each module that has them, then restore.
+
+    Used by the standard prepare()/verify() so kubectl and the baseline follow
+    the runner's `environment` instead of the EVAL_* shell variables. Values
+    that are None are left alone.
+    """
+    values = {k: v for k, v in values.items() if v is not None}
+    saved = [(m, k, getattr(m, k)) for m in modules for k in values if hasattr(m, k)]
+    for m, k, _ in saved:
+        setattr(m, k, values[k])
+    try:
+        yield
+    finally:
+        for m, k, v in saved:
+            setattr(m, k, v)

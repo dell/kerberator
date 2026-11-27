@@ -33,6 +33,12 @@ import sys
 import tempfile
 import time
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from harness import environment as envlib, legacy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]   # suites/<suite> -> skill-tests -> .claude -> repo root
 QUICKSTART = ROOT / "examples" / "quickstart"
@@ -42,6 +48,12 @@ SECRET, SECRET_KEY = "svc-2001-keytab", "svc-2001.keytab"
 REALM = "EXAMPLE.COM"
 OWNED = "kerberator.dell.com/eval-owned"      # what --apply creates; --reset deletes it
 READONLY_SA = "op02-readonly"
+
+
+def harness_replies(case):
+    """The harness reply for this case from its approval_policy (was the conversation field)."""
+    reply = (case.get("approval_policy") or {}).get("reply")
+    return [reply] if reply else []
 
 
 def load_case(case_id):
@@ -250,7 +262,7 @@ def make_readonly_kubeconfig(c, namespace, path):
 def apply_fixture(c, case, workspace, data_dir):
     """Build the case's starting state after reset(). Returns the agent kubeconfig
     path (None = the evaluator's own context) and its context name."""
-    fixture, ns = case["fixture"], case["namespace"]
+    fixture, ns = case["setup"]["fixture"], case["namespace"]
     workspace.mkdir(parents=True, exist_ok=True)
     for f in workspace.glob("krb5.conf"):
         f.unlink()
@@ -272,7 +284,7 @@ def apply_fixture(c, case, workspace, data_dir):
 def preflight(c, case, snap, workspace, agent_kubeconfig):
     """Deterministic checks that the case's starting state is really there."""
     issues = []
-    fixture, ns = case["fixture"], case["namespace"]
+    fixture, ns = case["setup"]["fixture"], case["namespace"]
     tenants_in_ns = [t for t in snap["tenants"] if t["namespace"] == ns]
     if fixture.startswith("empty_namespace") or fixture == "readonly_kubeconfig":
         if ns not in snap["namespaces"]:
@@ -323,7 +335,63 @@ def atomic_private_json(path, payload):
             os.unlink(tmp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point (Shared Suite Standard): prepare(scenario, environment)
+# Runs main() above in-process; the CLI is unchanged.
+
+SUITE_ID = "op02_create_tenant"
+_SETUP_STATUS = {"READY": "READY", "INCONCLUSIVE": "UNKNOWN"}
+
+
+def prepare(scenario, environment):
+    """Confirm (and, only when authorized, build) the case fixture; save the baseline.
+
+    Needs an explicit context. --apply (reset + build fixture, kind-* only) runs
+    only when the environment passes the mutation gate. The user's files
+    (./krb5.conf) are written to environment.workspace_dir. The filled-in prompt
+    and the agent's kubeconfig/context are returned in agent_inputs.
+    """
+    env = envlib.normalize(environment)
+    case_id = scenario["case_id"]
+    suite_id = scenario.get("suite_id") or SUITE_ID
+    ctx = env.get("context")
+    namespace = scenario.get("namespace")
+
+    def result(status, issues, ref=None, agent_inputs=None):
+        return envlib.setup_result(status, {**scenario, "suite_id": suite_id}, env, baseline_ref=ref,
+                                   issues=issues, context=ctx, namespace=namespace,
+                                   agent_inputs=agent_inputs)
+
+    issues = envlib.problems(env)
+    if not ctx:
+        issues.append("environment.context is required; refusing to guess a cluster")
+    argv = ["--case-id", case_id, "--context", str(ctx), "--workspace-files", str(env.get("workspace_dir"))]
+    if env["allow_fixture_mutation"]:
+        gate = envlib.mutation_gate(env, scenario["setup"].get("fixture"))
+        if ctx and not ctx.startswith("kind-"):
+            gate.append("fixture changes only run on a disposable kind-* context")
+        issues += gate
+        argv.append("--apply")
+    if issues:
+        return result("BLOCKED", issues)
+
+    baseline = envlib.artifact_path(env, suite_id, case_id, "baseline.json")
+    baseline.unlink(missing_ok=True)
+    argv += ["--output", str(baseline)]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None:
+        return result("UNKNOWN", [f"setup error: {err}"])
+    if not baseline.is_file():
+        return result("BLOCKED", [err or "setup produced no baseline"])
+    raw = json.loads(baseline.read_text(encoding="utf-8"))
+    agent = raw.get("agent") or {}
+    return result(_SETUP_STATUS.get(raw.get("setup_status"), "UNKNOWN"), list(raw.get("issues", [])),
+                  str(baseline), {"prompt": agent.get("user_prompt"), "kubeconfig": agent.get("kubeconfig"),
+                                  "context": agent.get("context"), "workspace_files": agent.get("workspace_files")})
+
+
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--case-id", required=True)
     p.add_argument("--context", required=True, help="explicit test context; never auto-selected")
@@ -333,7 +401,7 @@ def main():
                    help="where the user's files (./krb5.conf) are written for the agent's workspace")
     p.add_argument("--wait", type=int, default=240, help="seconds to wait for svc-2001 after a reset")
     p.add_argument("--output", type=Path, help="private baseline JSON (default results/<case>-baseline.json)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     _, case = load_case(args.case_id)
     if (args.reset or args.apply) and not args.context.startswith("kind-"):
@@ -347,7 +415,7 @@ def main():
         reset(c, args.wait)
     if args.apply:
         agent_kubeconfig, agent_context = apply_fixture(c, case, args.workspace_files, data_dir)
-    elif case["fixture"] == "readonly_kubeconfig":
+    elif case["setup"]["fixture"] == "readonly_kubeconfig":
         guess = data_dir / f"{case['case_id']}-agent.kubeconfig"
         agent_kubeconfig, agent_context = (str(guess), f"{args.context}-readonly") if guess.is_file() else (None, None)
 
@@ -368,8 +436,8 @@ def main():
         "case_id": args.case_id, "scenario": case["scenario"], "abnormal": case["abnormal"],
         "context": args.context, "setup_status": "READY" if not issues else "INCONCLUSIVE",
         "applied": bool(args.apply), "issues": issues,
-        "agent": {"user_prompt": fill(case["user_prompt"]),
-                  "conversation": [fill(t["user_reply"]) for t in case.get("conversation", [])],
+        "agent": {"user_prompt": fill(case["prompt"]),
+                  "conversation": [fill(r) for r in harness_replies(case)],
                   "workspace_files": str(args.workspace_files),
                   "kubeconfig": agent_kubeconfig, "context": agent_context},
         "images": images,

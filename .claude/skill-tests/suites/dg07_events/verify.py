@@ -12,11 +12,22 @@ Exit: 0 pass, 1 fail (diff printed to stdout), 2 setup/infra error.
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
+import io
 import json
 from pathlib import Path
 import sys
 
+# The standard runner imports this file by path, so make the suite folder
+# (for _cluster) and .claude/skill-tests/ (shared modules) importable.
+_SUITE_DIR = Path(__file__).resolve().parent
+for _p in (_SUITE_DIR, _SUITE_DIR.parents[1]):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import _cluster  # noqa: E402
+from grading.results import CheckResult, Finding, inconclusive  # noqa: E402
 from _cluster import (  # noqa: E402  — shared with setup.py
     BASELINE,
     log as _log, require_cluster as _require_cluster, snapshot,
@@ -80,6 +91,31 @@ def verify_no_change() -> int:
 MODES = {
     "no-change": verify_no_change,
 }
+
+
+# ---------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# The CLI below (python3 verify.py no-change) is unchanged.
+# ---------------------------------------------------------------------------
+def verify(scenario, setup_result, environment):
+    """SYSTEM result: the cluster snapshot matches the setup baseline (read-only skill)."""
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    ref = setup_result.get("baseline_ref")
+    if not ref:
+        return inconclusive("baseline_missing", "setup_result has no baseline_ref")
+    env = environment or {}
+    out = io.StringIO()
+    try:
+        with _cluster.bound([sys.modules[__name__], _cluster],
+                            EVAL_KUBECONFIG=env.get("kubeconfig_path"), EVAL_CONTEXT=env.get("context"),
+                            BASELINE=str(ref)), contextlib.redirect_stdout(out):
+            code = verify_no_change()
+    except VerifyError as exc:          # infra problem, not an agent verdict
+        return inconclusive("verification_error", str(exc))
+    if code == 0:
+        return CheckResult.from_findings([Finding("cluster_unchanged", "PASS", "cluster matches the baseline", [str(ref)])])
+    return CheckResult.from_findings([Finding("cluster_unchanged", "FAIL", out.getvalue()[-2000:], [str(ref)])])
 
 
 def main() -> int:

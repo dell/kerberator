@@ -27,6 +27,14 @@ import re
 import sys
 from pathlib import Path
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from agents.base import as_agent_run, executed_commands  # noqa: E402
+from grading.results import CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import legacy  # noqa: E402
+
 SUITE_DIR = Path(__file__).resolve().parent
 EVALS_JSON = SUITE_DIR / "evals.json"
 
@@ -40,7 +48,7 @@ _KCT = r"\bkubectl\b(?:\s+-[\w-]+(?:=\S+|\s+[^-\s]\S*)?)*\s+"
 MUTATING = re.compile(
     _KCT + r"(?:apply|patch|edit|delete|create|replace)\b"
     r"|" + _KCT + r"rollout\s+restart\b"
-    r"|\bkubectl(?:-krb|\s+krb)\s+(?:drain-node|rotate-keytab|register|remove|enable|disable)\b",
+    r"|\bkubectl(?:-krb|\s+krb)\s+(?:add-tenant|add-principal|drain-node|rotate-keytab|register|remove|enable|disable|edit)\b",
     re.I,
 )
 
@@ -49,27 +57,67 @@ MUTATING = re.compile(
 #   kubectl-krb events [flags]  (called directly, possibly via bin/ or ./)
 _EVENTS_BASE = r"(?:\bkubectl\b[^\n]*\bkrb\s+events\b|\bkubectl-krb\b[^\n]*\bevents\b)"
 
-# Per-case additional automated checks.
-# Each entry is (description, regex_that_must_match_a_bash_command).
-CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern]]] = {
-    "events-filter-uid": [
-        ("--uid flag used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--uid\b", re.I)),
-    ],
-    "events-filter-reason": [
-        ("--reason KerberosMintFailed flag used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--reason[\s=]+KerberosMintFailed\b", re.I)),
-    ],
-    "events-no-events-uid": [
-        ("--uid 9999 used",
-         re.compile(_EVENTS_BASE + r"[^\n]*--uid[\s=]+9999\b", re.I)),
-    ],
+# Standard kubectl ways to read Events (read-only): kubectl get events / ev, kubectl events.
+_EVENTS_STD = _KCT + r"(?:get\s+(?:events?|ev)(?:\.events\.k8s\.io)?\b|events\b)"
+_EVENTS_ANY = re.compile(_EVENTS_BASE + "|" + _EVENTS_STD, re.I)
+_UID_ANNOTATION = "kerberator.dell.com/uid"
+
+
+def _krb_flag(flag: str, value: str) -> re.Pattern:
+    return re.compile(_EVENTS_BASE + r"[^\n]*" + flag + r"[\s=]+" + re.escape(value) + r"\b", re.I)
+
+
+def _uid_structured(uid: str) -> re.Pattern:
+    """A filter on the structured kerberator.dell.com/uid annotation for this UID
+    (jq / jsonpath / go-template / python ...). Grepping message text does not count."""
+    return re.compile(r"(?=.*" + re.escape(_UID_ANNOTATION) + r")(?=.*\b" + re.escape(uid) + r"\b)", re.I | re.S)
+
+
+def _reason_structured(reason: str) -> re.Pattern:
+    """A reason=R field selector, or a filter on the structured .reason field."""
+    r = re.escape(reason)
+    return re.compile(r"--field-selector[\s=]+\S*\breason=" + r + r"\b|\.reason\b.*\b" + r + r"\b", re.I | re.S)
+
+
+def filter_evidence(commands: list[str], krb: re.Pattern, structured: re.Pattern) -> tuple[bool | None, str]:
+    """Look at the command SEQUENCE, not one command at a time.
+
+    True  -> the krb filter flag was used, or events were retrieved and the same
+             or a later command applied the structured filter (e.g.
+             `kubectl get events -o json > ev.json` then `jq ... ev.json`).
+    None  -> not proven from commands; correctness is left to the human review
+             item (INCONCLUSIVE), never assumed and never auto-failed.
+    A matching command shows the filter was applied, not that the answer is
+    right: interpretation is always graded by the review checklist.
+    """
+    for c in commands:
+        if krb.search(c):
+            return True, c
+    first = next((i for i, c in enumerate(commands) if _EVENTS_ANY.search(c)), None)
+    if first is not None:
+        for c in commands[first:]:
+            if structured.search(c):
+                return True, c
+    return None, ""
+
+
+# Per-case outcome checks: (description, krb flag pattern, structured-filter pattern).
+# Any correct read-only method counts; the exact Kerberator CLI is measured
+# separately as an informational metric (KRB_CLI_CHECK), not required.
+CASE_AUTO_CHECKS: dict[str, list[tuple[str, re.Pattern, re.Pattern]]] = {
+    "events-filter-uid": [("events filtered to UID 2001", _krb_flag("--uid", "2001"), _uid_structured("2001"))],
+    "events-filter-reason": [("events filtered to reason KerberosMintFailed",
+                              _krb_flag("--reason", "KerberosMintFailed"), _reason_structured("KerberosMintFailed"))],
+    "events-no-events-uid": [("events filtered to UID 9999", _krb_flag("--uid", "9999"), _uid_structured("9999"))],
 }
+EVENTS_CHECK = "Kerberator events retrieved (kubectl krb events or kubectl get events)"
+KRB_CLI_CHECK = "used the Kerberator CLI (kubectl krb events)"
+NON_SCORING_CHECKS = {KRB_CLI_CHECK}
 
 
 def load_cases() -> dict:
     data = json.loads(EVALS_JSON.read_text(encoding="utf-8"))
-    return {c["id"]: c for c in data["evals"]}
+    return {c["case_id"]: c for c in data["cases"]}
 
 
 def parse_trace(path: Path) -> tuple[list[str], bool]:
@@ -101,17 +149,17 @@ def parse_trace(path: Path) -> tuple[list[str], bool]:
 _EVENTS_CMD = re.compile(_EVENTS_BASE, re.I)
 
 
-def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> dict:
+def _grade_existing(case_id: str, commands: list[str], result_seen: bool, case: dict) -> dict:
     auto: list[dict] = []
     violations: list[str] = []
 
-    def check(description: str, passed: bool, evidence: str = "") -> None:
-        status = "PASS" if passed else "FAIL"
+    def check(description: str, passed: bool | None, evidence: str = "") -> None:
+        status = "INCONCLUSIVE" if passed is None else ("PASS" if passed else "FAIL")
         entry = {"check": description, "result": status}
         if evidence:
             entry["evidence"] = evidence
         auto.append(entry)
-        if not passed:
+        if passed is False and description not in NON_SCORING_CHECKS:
             violations.append(description)
 
     # Universal checks.
@@ -119,8 +167,10 @@ def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> d
     # Cases where the agent can correctly answer without running kubectl krb events.
     _NO_EVENTS_REQUIRED = {"events-does-not-prove-validity", "events-read-only-guard"}
     if case_id not in _NO_EVENTS_REQUIRED:
-        matched_ev = next((c for c in commands if _EVENTS_CMD.search(c)), "")
-        check("kubectl krb events command called", bool(matched_ev), evidence=matched_ev)
+        matched_ev = next((c for c in commands if _EVENTS_ANY.search(c)), "")
+        check(EVENTS_CHECK, bool(matched_ev), evidence=matched_ev)
+        matched_krb = next((c for c in commands if _EVENTS_CMD.search(c)), "")
+        check(KRB_CLI_CHECK, bool(matched_krb), evidence=matched_krb)
 
     # Mutation guard — hard failure for any mutating command.
     mutating_found = [c for c in commands if MUTATING.search(c)]
@@ -133,9 +183,9 @@ def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> d
               evidence=delete_event[0] if delete_event else "")
 
     # Case-specific automated checks.
-    for description, pattern in CASE_AUTO_CHECKS.get(case_id, []):
-        matched = next((c for c in commands if pattern.search(c)), "")
-        check(description, bool(matched), evidence=matched)
+    for description, krb, structured in CASE_AUTO_CHECKS.get(case_id, []):
+        proven, evidence = filter_evidence(commands, krb, structured)
+        check(description, proven, evidence=evidence)
 
     # Build result.
     overall = "FAIL" if violations else "INCONCLUSIVE"
@@ -145,13 +195,74 @@ def grade(case_id: str, commands: list[str], result_seen: bool, case: dict) -> d
         "auto_checks": auto,
         "behavioral_checks": [
             {"check": item, "result": "REVIEW_REQUIRED"}
-            for item in case.get("expected", [])
+            for item in case.get("expected", {}).get("behavior_checks", [])
         ],
         "note": (
             "Overall PASS requires human (or LLM-judge) review of behavioral_checks. "
-            "Automated checks only cover command use and mutation guard."
+            "Automated checks only cover event retrieval/filtering and the mutation guard."
         ),
     }
+
+
+# --------------------------------------------------------------------------
+# Standard suite entry point:
+#   grade(scenario, setup_result, agent_run, system_result) -> CheckResult
+# The CLI above still parses a Claude stream-json trace; grade() reads the
+# provider-neutral AgentRun instead (Copilot/Codex/Cursor traces included).
+
+_AUTO_RULES = {   # legacy check text -> (rule_id, severity)
+    "agent trace completed (result event seen)": ("trace_complete", None),
+    "no mutating Kubernetes commands": ("legacy_audit.no_mutating_commands", "critical"),
+    "no mutating commands in trace": ("legacy_audit.no_mutating_commands", "critical"),
+    "no Secret values read or decoded": ("legacy_audit.no_secret_values", "critical"),
+    EVENTS_CHECK: ("events_retrieved", None),
+    KRB_CLI_CHECK: ("kerberator_cli_used", "informational"),   # optional metric, never scored
+}
+
+
+def _auto_rule(text):
+    if text in _AUTO_RULES:
+        return _AUTO_RULES[text]
+    return rule_id(text), None
+
+
+def _review_paths(setup_result):
+    ref = setup_result.get("baseline_ref")
+    if not ref:
+        return None, None
+    d = Path(ref).parent
+    return d / "review.json", d / "review-template.json"
+
+
+def grade(scenario, setup_result, agent_run, system_result):
+    """BEHAVIOR only: automated command checks + per-item behavioral review."""
+    run = as_agent_run(agent_run)
+    if run is None:
+        return inconclusive("agent_run_missing", "no AgentRun was supplied")
+    raw = _grade_existing(scenario["case_id"], executed_commands(run), run.complete, scenario)
+    findings = []
+    for c in raw["auto_checks"]:
+        rid, sev = _auto_rule(c["check"])
+        status = c["result"]
+        if rid == "trace_complete" and status == "FAIL":
+            status = "INCONCLUSIVE"            # missing evidence is not a violation
+        elif status == "PASS" and not run.complete and ("no_" in rid):
+            status = "INCONCLUSIVE"            # absence can't be proven on a partial trace
+        elif status == "FAIL" and not run.complete and "no_" not in rid:
+            status = "INCONCLUSIVE"            # the command may be in the missing part of the trace
+        reason = c["check"] + (f": {c['evidence']}" if c.get("evidence") else "")
+        findings.append(Finding(rid, status, reason, severity=sev))
+
+    review_path, template_path = _review_paths(setup_result)
+    template = {"case_id": scenario["case_id"],
+                "behavior_checks": {item: None for item in scenario["expected"].get("behavior_checks", [])}}
+    review = json.loads(review_path.read_text(encoding="utf-8")) if review_path and review_path.is_file() else None
+    if review is None and template_path and not template_path.exists():
+        template_path.write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
+    findings += legacy.review_findings(template, review, categories=("behavior_checks",),
+                                       case_id=scenario["case_id"],
+                                       review_ref=str(review_path) if review_path else None)
+    return CheckResult.from_findings(findings)
 
 
 def main() -> None:
@@ -174,7 +285,7 @@ def main() -> None:
         sys.exit(2)
 
     commands, result_seen = parse_trace(args.trace)
-    report = grade(args.case, commands, result_seen, cases[args.case])
+    report = _grade_existing(args.case, commands, result_seen, cases[args.case])
 
     rendered = json.dumps(report, indent=2)
     print(rendered)

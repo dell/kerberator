@@ -1,4 +1,5 @@
 {
+  "suite_id": "dg08_operator_health",
   "skill_id": "DG-08",
   "skill_name": "kerberator-diagnose-operator",
   "skill_path": ".claude/skills/kerberator-diagnose-operator",
@@ -35,14 +36,10 @@
   "cases": [
     {
       "case_id": "dg08-01-healthy-operator",
-      "scenario": "healthy_operator_controller",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "healthy_operator_controller", "preconditions": ["Operator Deployment observed with readyReplicas equal to desired replicas and available condition true", "Operator controller pods Ready without current failure events", "Tenant and Principal CRDs exist and expose the expected served/storage API versions"]},
       "description": "Operator Deployment is available, controller pods are ready, and both Kerberator CRDs are installed and served.",
-      "user_prompt": "Is the Kerberator operator controller healthy on the selected test cluster?",
-      "fixture_requirements": [
-        "Operator Deployment observed with readyReplicas equal to desired replicas and available condition true",
-        "Operator controller pods Ready without current failure events",
-        "Tenant and Principal CRDs exist and expose the expected served/storage API versions"
-      ],
+      "prompt": "Is the Kerberator operator controller healthy on the selected test cluster?",
       "expected": {
         "status": "healthy",
         "fault_domain": "none-observed",
@@ -53,14 +50,10 @@
     },
     {
       "case_id": "dg08-02-crash-loop",
-      "scenario": "controller_crash_loop_backoff",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "controller_crash_loop_backoff", "preconditions": ["Operator pod container waiting reason CrashLoopBackOff and restart count above zero", "Deployment has fewer ready replicas than desired", "Relevant bounded current or previous controller logs and/or pod events are available"]},
       "description": "Operator container repeatedly crashes; previous controller logs and pod events provide relevant clues.",
-      "user_prompt": "The Kerberator operator keeps restarting. Diagnose the controller itself.",
-      "fixture_requirements": [
-        "Operator pod container waiting reason CrashLoopBackOff and restart count above zero",
-        "Deployment has fewer ready replicas than desired",
-        "Relevant bounded current or previous controller logs and/or pod events are available"
-      ],
+      "prompt": "The Kerberator operator keeps restarting. Diagnose the controller itself.",
       "expected": {
         "status": "unhealthy",
         "fault_domain": "controller-runtime",
@@ -71,14 +64,10 @@
     },
     {
       "case_id": "dg08-03-image-pull",
-      "scenario": "operator_image_pull_failure",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "operator_image_pull_failure", "preconditions": ["Operator pod waiting reason ImagePullBackOff or ErrImagePull", "Pod events mention image pull, registry, tag, or access failure", "Configured manager container image reference is observable"]},
       "description": "The operator controller cannot pull its image.",
-      "user_prompt": "Why isn't the Kerberator operator pod starting after deployment?",
-      "fixture_requirements": [
-        "Operator pod waiting reason ImagePullBackOff or ErrImagePull",
-        "Pod events mention image pull, registry, tag, or access failure",
-        "Configured manager container image reference is observable"
-      ],
+      "prompt": "Why isn't the Kerberator operator pod starting after deployment?",
       "expected": {
         "status": "unhealthy",
         "fault_domain": "controller-image-distribution",
@@ -89,14 +78,10 @@
     },
     {
       "case_id": "dg08-04-unschedulable",
-      "scenario": "controller_pending_failed_scheduling",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "controller_pending_failed_scheduling", "preconditions": ["Operator pod Pending with PodScheduled=False", "FailedScheduling event identifies an actual node/resource/taint constraint", "No evidence of image-pull or controller crash in this fixture"]},
       "description": "Operator controller pod cannot be scheduled due to node or resource constraints.",
-      "user_prompt": "The operator Deployment has no ready pods. Is this a scheduler or configuration issue?",
-      "fixture_requirements": [
-        "Operator pod Pending with PodScheduled=False",
-        "FailedScheduling event identifies an actual node/resource/taint constraint",
-        "No evidence of image-pull or controller crash in this fixture"
-      ],
+      "prompt": "The operator Deployment has no ready pods. Is this a scheduler or configuration issue?",
       "expected": {
         "status": "unhealthy",
         "fault_domain": "controller-scheduling",
@@ -107,14 +92,10 @@
     },
     {
       "case_id": "dg08-05-reconcile-error",
-      "scenario": "running_controller_with_reconciliation_error",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "running_controller_with_reconciliation_error", "preconditions": ["Operator Deployment and controller pod Ready", "Recent controller logs show a named reconciliation error with a supported resource and failing operation", "Fixture evidence identifies a config, access, or admission denial rather than a controller crash"]},
       "description": "Operator controller is Ready, but bounded logs contain a resource-specific reconciliation failure caused by configuration, RBAC, or admission validation.",
-      "user_prompt": "The operator pod is running, but a Tenant update is failing. Is the operator down?",
-      "fixture_requirements": [
-        "Operator Deployment and controller pod Ready",
-        "Recent controller logs show a named reconciliation error with a supported resource and failing operation",
-        "Fixture evidence identifies a config, access, or admission denial rather than a controller crash"
-      ],
+      "prompt": "The operator pod is running, but a Tenant update is failing. Is the operator down?",
       "expected": {
         "status": "running-with-errors",
         "fault_domain": "reconciliation-or-configuration",
@@ -125,14 +106,10 @@
     },
     {
       "case_id": "dg08-06-missing-crd",
-      "scenario": "missing_kerberator_crd",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "missing_kerberator_crd", "preconditions": ["Read-only CRD query confirms principals.kerberator.dell.com is absent (Tenant CRD presence specified separately)", "Operator Deployment status is independently available", "No requirement to prove that the missing CRD caused a controller crash"]},
       "description": "One or both required Kerberator CRDs are not installed.",
-      "user_prompt": "The operator Deployment is visible, but Kubernetes doesn't recognize Principal resources. What's wrong?",
-      "fixture_requirements": [
-        "Read-only CRD query confirms principals.kerberator.dell.com is absent (Tenant CRD presence specified separately)",
-        "Operator Deployment status is independently available",
-        "No requirement to prove that the missing CRD caused a controller crash"
-      ],
+      "prompt": "The operator Deployment is visible, but Kubernetes doesn't recognize Principal resources. What's wrong?",
       "expected": {
         "status": "installation-incomplete",
         "fault_domain": "operator-installation-crds",
@@ -143,14 +120,10 @@
     },
     {
       "case_id": "dg08-07-crd-version",
-      "scenario": "served_storage_crd_version_mismatch",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "served_storage_crd_version_mismatch", "preconditions": ["Tenant and Principal CRD served/storage version metadata is readable", "Trusted fixture provides the operator release's expected CRD version requirements", "At least one observed served or storage version conflicts with documented expectation"]},
       "description": "Installed CRD API versions do not match the test fixture's documented expected API shape.",
-      "user_prompt": "Can you check whether our installed Kerberator CRDs match the operator release?",
-      "fixture_requirements": [
-        "Tenant and Principal CRD served/storage version metadata is readable",
-        "Trusted fixture provides the operator release's expected CRD version requirements",
-        "At least one observed served or storage version conflicts with documented expectation"
-      ],
+      "prompt": "Can you check whether our installed Kerberator CRDs match the operator release?",
       "expected": {
         "status": "installation-mismatch",
         "fault_domain": "operator-installation-crds",
@@ -161,14 +134,10 @@
     },
     {
       "case_id": "dg08-08-version-difference",
-      "scenario": "cli_vs_operator_version_difference",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "cli_vs_operator_version_difference", "preconditions": ["kubectl krb version reports a local CLI version", "Operator Deployment manager image reference/tag is independently readable", "No verified compatibility matrix or runtime binary version establishing an incompatibility"]},
       "description": "The local kubectl-krb version differs from the observed operator Deployment image tag; compatibility is not established by the fixture.",
-      "user_prompt": "kubectl krb version is different from the operator image tag. Does that mean the operator is broken?",
-      "fixture_requirements": [
-        "kubectl krb version reports a local CLI version",
-        "Operator Deployment manager image reference/tag is independently readable",
-        "No verified compatibility matrix or runtime binary version establishing an incompatibility"
-      ],
+      "prompt": "kubectl krb version is different from the operator image tag. Does that mean the operator is broken?",
       "expected": {
         "status": "compatibility-unverified",
         "fault_domain": "version-evidence",
@@ -179,14 +148,10 @@
     },
     {
       "case_id": "dg08-09-cli-only",
-      "scenario": "only_local_cli_version_available",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "only_local_cli_version_available", "preconditions": ["kubectl krb version succeeds locally", "Operator Deployment/pod status cannot be obtained in the fixture", "No observed runtime operator version or CRD status"]},
       "description": "The CLI version command works, but live operator version and health evidence is unavailable.",
-      "user_prompt": "I ran kubectl krb version. Is that enough to confirm our operator is healthy and up to date?",
-      "fixture_requirements": [
-        "kubectl krb version succeeds locally",
-        "Operator Deployment/pod status cannot be obtained in the fixture",
-        "No observed runtime operator version or CRD status"
-      ],
+      "prompt": "I ran kubectl krb version. Is that enough to confirm our operator is healthy and up to date?",
       "expected": {
         "status": "unverified",
         "fault_domain": "insufficient-operator-evidence",
@@ -197,14 +162,10 @@
     },
     {
       "case_id": "dg08-10-rbac-limited",
-      "scenario": "operator_namespace_access_forbidden",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "operator_namespace_access_forbidden", "preconditions": ["Operator namespace read or list of Deployments/pods is forbidden", "Controller logs are inaccessible or not independently verified", "Any available CLI or CRD metadata is explicitly separated from unreadable workload evidence"]},
       "description": "A namespace-restricted user cannot read the operator Deployment, pods, or logs.",
-      "user_prompt": "Can you check operator health with my namespace-limited cluster access?",
-      "fixture_requirements": [
-        "Operator namespace read or list of Deployments/pods is forbidden",
-        "Controller logs are inaccessible or not independently verified",
-        "Any available CLI or CRD metadata is explicitly separated from unreadable workload evidence"
-      ],
+      "prompt": "Can you check operator health with my namespace-limited cluster access?",
       "expected": {
         "status": "unverified",
         "fault_domain": "insufficient-rbac",
@@ -215,14 +176,10 @@
     },
     {
       "case_id": "dg08-11-tenant-handoff",
-      "scenario": "healthy_operator_with_unhealthy_tenant_daemon",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "healthy_operator_with_unhealthy_tenant_daemon", "preconditions": ["Operator Deployment/pod readiness and relevant controller checks are healthy", "Tenant status independently reports daemon readiness issue", "No controller-side error establishes the operator as the cause"]},
       "description": "Operator controller is healthy, but a single Tenant's daemon pods are unhealthy; this belongs to DG-01.",
-      "user_prompt": "The Kerberator operator looks fine, but demo Tenant has 0/2 daemon nodes ready. Is the controller failing?",
-      "fixture_requirements": [
-        "Operator Deployment/pod readiness and relevant controller checks are healthy",
-        "Tenant status independently reports daemon readiness issue",
-        "No controller-side error establishes the operator as the cause"
-      ],
+      "prompt": "The Kerberator operator looks fine, but demo Tenant has 0/2 daemon nodes ready. Is the controller failing?",
       "expected": {
         "status": "healthy",
         "fault_domain": "tenant-daemon-out-of-scope",
@@ -233,13 +190,10 @@
     },
     {
       "case_id": "dg08-12-multiple-contexts",
-      "scenario": "ambiguous_kubernetes_context",
+      "approval_policy": {"required": false, "test_decision": "none"},
+      "setup": {"fixture": "ambiguous_kubernetes_context", "preconditions": ["More than one usable kubeconfig context is configured", "No context is explicitly selected by the user or fixture request"]},
       "description": "Multiple contexts are configured and the user hasn't selected a target cluster.",
-      "user_prompt": "Is the Kerberator operator healthy?",
-      "fixture_requirements": [
-        "More than one usable kubeconfig context is configured",
-        "No context is explicitly selected by the user or fixture request"
-      ],
+      "prompt": "Is the Kerberator operator healthy?",
       "expected": {
         "status": "requires-user-selection",
         "fault_domain": "context-selection",

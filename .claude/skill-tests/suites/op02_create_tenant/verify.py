@@ -32,6 +32,13 @@ import sys
 import tempfile
 import time
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from grading.results import CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import environment as envlib, legacy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("op02_setup", HERE / "setup.py")
 fixture = importlib.util.module_from_spec(_spec)
@@ -161,14 +168,49 @@ def write_private(path, payload):
             os.unlink(tmp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# Runs main() above in-process (same bounded waits); the CLI is unchanged.
+
+def verify(scenario, setup_result, environment):
+    """SYSTEM result: Tenant created as specified, or cluster unchanged."""
+    env = envlib.normalize(environment)
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    ref = setup_result.get("baseline_ref")
+    if not ref or not Path(ref).is_file():
+        return inconclusive("baseline_missing", "setup_result.baseline_ref does not point at a baseline file")
+    base = json.loads(Path(ref).read_text(encoding="utf-8"))
+    out = envlib.artifact_path(env, scenario.get("suite_id") or setup_result.get("suite_id"),
+                               scenario["case_id"], "verification.json")
+    out.unlink(missing_ok=True)
+    argv = ["--case-id", scenario["case_id"], "--baseline", ref, "--context", str(base.get("context")),
+            "--output", str(out)]
+    if env.get("verify_timeout_seconds") is not None:
+        argv += ["--timeout", str(int(env["verify_timeout_seconds"]))]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None or not out.is_file():
+        return inconclusive("verification_error", f"verify could not complete: {err}")
+    report = json.loads(out.read_text(encoding="utf-8"))
+    failures, refs = set(report.get("failures", [])), [ref, str(out)]
+    findings = [Finding(rule_id(c["check"])[:64], "PASS" if c["ok"] else ("FAIL" if c["check"] in failures
+                        else "INCONCLUSIVE"), c["check"], refs) for c in report.get("checks", [])]
+    listed = {c["check"] for c in report.get("checks", [])}
+    findings += [Finding(rule_id(m)[:64], "FAIL", m, refs) for m in report.get("failures", []) if m not in listed]
+    findings += [Finding(rule_id(m)[:64], "INCONCLUSIVE", m, refs)
+                 for m in report.get("uncertainties", []) if m not in listed]
+    return CheckResult.from_findings(findings)
+
+
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--case-id", required=True)
     p.add_argument("--baseline", type=Path, required=True)
     p.add_argument("--context", required=True, help="must equal the context recorded in the baseline")
     p.add_argument("--timeout", type=int, default=300, help="seconds to wait for the operator and daemon")
     p.add_argument("--output", type=Path)
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     _, case = fixture.load_case(args.case_id)
     baseline = json.loads(args.baseline.read_text(encoding="utf-8"))

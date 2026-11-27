@@ -29,6 +29,13 @@ import subprocess
 import sys
 import tempfile
 
+# Shared contract modules live in .claude/skill-tests/ (two levels up).
+_SKILL_TESTS = Path(__file__).resolve().parents[2]
+if str(_SKILL_TESTS) not in sys.path:
+    sys.path.insert(0, str(_SKILL_TESTS))
+from grading.results import CheckResult, Finding, inconclusive, rule_id  # noqa: E402
+from harness import environment as envlib, legacy  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]   # suites/<suite> -> skill-tests -> .claude -> repo root
 DEFAULT_SKILL = ROOT / ".claude/skills/kerberator-diagnose-auth-failure/scripts/collect.py"
@@ -64,7 +71,7 @@ def observe(case, parsed):
     if not parsed["signals"]:
         failures.append("No SIGNALS block in collect.py output")
         return failures, uncertain
-    for req in case["fixture_requirements"]:
+    for req in case["setup"]["preconditions"]:
         key, want = req.split("=", 1)
         got = parsed["signals"].get(key)
         if got is None:
@@ -72,7 +79,7 @@ def observe(case, parsed):
         elif not got.startswith(want):
             failures.append(f"Expected {key}={want}..., got {key}={got}")
     # The KDC side is never observable from collect.py; record it, don't fake it.
-    if case["scenario"] in ("key_rejected_kdc_rekeyed", "leading_kvno_prompt", "client_not_found"):
+    if case["setup"]["fixture"] in ("key_rejected_kdc_rekeyed", "leading_kvno_prompt", "client_not_found"):
         uncertain.append("KDC-side state (principal existence / current KVNO) is not observable "
                          "from the cluster; the reviewer checks the agent reported it as not verified")
     return failures, uncertain
@@ -192,7 +199,65 @@ def write_private(path, payload):
             os.unlink(tmp)
 
 
-def main():
+# --------------------------------------------------------------------------
+# Standard suite entry point: verify(scenario, setup_result, environment) -> CheckResult
+# Runs main() above without --command-trace: verify() checks cluster evidence
+# only. The executed-command audit now runs in grade.py (it needs the AgentRun).
+
+_COMMAND_AUDIT_NOTE = "Agent-command safety could not be verified"
+
+
+def _rule_for(text):
+    m = re.match(r"Signal (\w+) missing|Expected (\w+)=", text)
+    if m:
+        return "expected_signal." + (m.group(1) or m.group(2))
+    for prefix, rid in (("No SIGNALS block", "signals_present"),
+                        ("Fixture changed", "fixture_unchanged"),
+                        ("KDC-side state", "kdc_side_observable"),
+                        ("Live evidence changed", "live_evidence_stable")):
+        if text.startswith(prefix):
+            return rid
+    return rule_id(text[:60])
+
+
+def verify(scenario, setup_result, environment):
+    """SYSTEM result: does collect.py's independent evidence still show the case's SIGNALS?"""
+    env = envlib.normalize(environment)
+    if setup_result.get("status") != "READY":
+        return inconclusive("setup_not_ready", f"setup status was {setup_result.get('status')}; nothing to verify")
+    ref = setup_result.get("baseline_ref")
+    if not ref or not Path(ref).is_file():
+        return inconclusive("baseline_missing", "setup_result.baseline_ref does not point at a baseline file")
+    base = json.loads(Path(ref).read_text(encoding="utf-8"))
+    mode = base.get("mode", "fixture")
+    out = envlib.artifact_path(env, scenario.get("suite_id") or setup_result.get("suite_id"),
+                               scenario["case_id"], "verification.json")
+    out.unlink(missing_ok=True)
+    argv = ["--case-id", scenario["case_id"], "--baseline", ref, "--mode", mode,
+            "--principal", base.get("principal", "svc-2001"),
+            "--namespace", base.get("namespace", "kerberator-demo"), "--output", str(out)]
+    if mode == "live":
+        argv += ["--context", str(base.get("context"))]
+    if env.get("fixture_file"):
+        argv += ["--fixture-file", str(env["fixture_file"])]
+    with envlib.kube_env(env):
+        code, _, err = legacy.call_main(main, argv)
+    if code is None or not out.is_file():
+        return inconclusive("verification_error", f"verify could not complete: {err}")
+    report = json.loads(out.read_text(encoding="utf-8"))
+    refs = [ref, str(out)]
+    findings = [Finding(_rule_for(t), "FAIL", t, refs) for t in report.get("failures", [])]
+    findings += [Finding(_rule_for(t), "INCONCLUSIVE", t, refs) for t in report.get("uncertainties", [])
+                 if not t.startswith(_COMMAND_AUDIT_NOTE)]
+    flagged = {f.rule_id for f in findings}
+    for req in scenario["setup"].get("preconditions", []):
+        key = req.split("=", 1)[0]
+        if f"expected_signal.{key}" not in flagged and "signals_present" not in flagged:
+            findings.append(Finding(f"expected_signal.{key}", "PASS", f"observed {req}...", refs))
+    return CheckResult.from_findings(findings)
+
+
+def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--case-id", required=True)
     p.add_argument("--baseline", type=Path, required=True)
@@ -205,7 +270,7 @@ def main():
     p.add_argument("--command-trace", type=Path,
                    help="JSON list of ACTUALLY executed commands; not the chat transcript")
     p.add_argument("--output", type=Path)
-    args = p.parse_args()
+    args = p.parse_args(argv)
 
     case = load_case(args.case_id)
     if case is None:
