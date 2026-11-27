@@ -40,6 +40,7 @@ EXPECTED_COUNTS = {
     "op09_update_tenant_principal": 8,
     "op07_drain_node": 13,
     "op02_create_tenant": 9,
+    "op04_rotate_keytab": 9,
     "op01_inspect": 12,
     "op11_install_upgrade": 5,
     "op08_validate_config": 8,
