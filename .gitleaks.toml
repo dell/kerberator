@@ -10,7 +10,7 @@
 [extend]
 useDefault = true
 
-[allowlist]
+[[allowlists]]
 description = "Kerberos keytab file/Secret names and synthetic test fixtures"
 regexTarget = "line"
 regexes = [
@@ -23,3 +23,19 @@ paths = [
   '''shared/keytab/parse_test\.go''',
   '''operator/internal/controller/principal_kvno_test\.go''',
 ]
+
+[[allowlists]]
+description = "Skill-test fixtures: eval case IDs and the base64 of 'fakekeytab'"
+# Default regexTarget is the matched secret value itself, so a real key on
+# the same line is still reported.
+regexes = [
+  # eval case IDs such as dg02-01-healthy, op10-03-remove-tenant
+  '''^(?:dg|op)\d{2}-\d{2}-[a-z0-9-]+$''',
+  # base64("fakekeytab") in the kerberator-validate-config kubectl stub
+  '''^ZmFrZWtleXRhYg==$''',
+]
+paths = [
+  '''^\.claude/skill-tests/''',
+  '''^\.claude/skills/[^/]+/tests/''',
+]
+condition = "AND"
